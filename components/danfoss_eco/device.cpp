@@ -227,7 +227,11 @@ namespace esphome
 
     void Device::disconnect()
     {
-      this->parent()->set_enabled(false);
+      if (this->parent()->enabled)
+      {
+        ESP_LOGD(TAG, "[%s] disabling ble_client", this->get_name().c_str());
+        this->parent()->set_enabled(false);
+      }
       this->node_state = ClientState::IDLE;
     }
 
