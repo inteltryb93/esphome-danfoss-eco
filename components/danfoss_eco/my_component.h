@@ -26,11 +26,13 @@ namespace esphome
                 auto traits = ClimateTraits();
                 traits.set_supports_current_temperature(true);
 
-                traits.set_supported_modes(set<ClimateMode>({ClimateMode::CLIMATE_MODE_HEAT, ClimateMode::CLIMATE_MODE_AUTO}));
+                traits.set_supported_modes(set<ClimateMode>({ClimateMode::CLIMATE_MODE_HEAT}));
                 traits.set_visual_temperature_step(0.5);
 
                 traits.set_supports_current_temperature(true); // supports reporting current temperature
                 traits.set_supports_action(true);              // supports reporting current action
+                traits.set_visual_min_temperature(6);
+                traits.set_visual_max_temperature(28);
                 return traits;
             }
 
@@ -52,3 +54,4 @@ namespace esphome
 
     } // namespace danfoss_eco
 } // namespace esphome
+
