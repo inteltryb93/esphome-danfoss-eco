@@ -240,7 +240,7 @@ namespace esphome
       if (str.length() > 0)
         this->pin_code_ = atoi((const char *)str.c_str());
 
-      ESP_LOGD(TAG, "[%s] PIN: %04d", this->get_name().c_str(), this->pin_code_);
+      ESP_LOGD(TAG, "[%s] PIN: %04ld", this->get_name().c_str(), this->pin_code_);
     }
 
     void Device::set_secret_key(const string &str)
