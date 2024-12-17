@@ -3,7 +3,6 @@
 
 #include "helpers.h"
 
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 namespace esphome
 {
     namespace danfoss_eco
