@@ -4,6 +4,9 @@
 
 #include "properties.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
 namespace esphome
 {
     namespace danfoss_eco
@@ -35,11 +38,54 @@ namespace esphome
             }
         };
 
-        class CommandQueue : public esphome::esp32_ble_tracker::Queue<Command>
+        // Start with 32 entries.
+        // Log queue size/usage or add backpressure warnings.
+        // Scale up to 64 only if you observe dropped or missing advertisements
+        class CommandQueue
         {
-        public:
-            bool is_empty() { return this->q_.empty(); }
-        };
+        protected:
+            QueueHandle_t queue_handle_;
+            static constexpr size_t QUEUE_SIZE = 32;
 
+        public:
+            CommandQueue()
+            {
+                queue_handle_ = xQueueCreate(QUEUE_SIZE, sizeof(Command *));
+            }
+
+            ~CommandQueue()
+            {
+                if (queue_handle_ != nullptr)
+                {
+                    // Clean up any remaining commands
+                    Command *cmd;
+                    while (xQueueReceive(queue_handle_, &cmd, 0) == pdTRUE)
+                    {
+                        delete cmd;
+                    }
+                    vQueueDelete(queue_handle_);
+                }
+            }
+
+            void push(Command *cmd)
+            {
+                xQueueSend(queue_handle_, &cmd, portMAX_DELAY);
+            }
+
+            Command *pop()
+            {
+                Command *cmd = nullptr;
+                if (xQueueReceive(queue_handle_, &cmd, 0) == pdTRUE)
+                {
+                    return cmd;
+                }
+                return nullptr;
+            }
+
+            bool empty() const
+            {
+                return uxQueueMessagesWaiting(queue_handle_) == 0;
+            }
+        };
     } // namespace danfoss_eco
 } // namespace esphome
