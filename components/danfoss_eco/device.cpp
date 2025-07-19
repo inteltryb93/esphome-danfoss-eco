@@ -67,9 +67,42 @@ namespace esphome
 
     void Device::control(const ClimateCall &call)
     {
+      // SAFETY: Always ensure we have current device state before making changes
+      bool need_to_read_first = false;
+      
+      if (call.get_target_temperature().has_value() && !this->p_temperature->data)
+      {
+        ESP_LOGW(TAG, "[%s] Need to read temperature data first", this->get_name().c_str());
+        need_to_read_first = true;
+      }
+      
+      if (call.get_mode().has_value() && !this->p_settings->data)
+      {
+        ESP_LOGW(TAG, "[%s] Need to read settings data first", this->get_name().c_str());
+        need_to_read_first = true;
+      }
+      
+      if (need_to_read_first)
+      {
+        ESP_LOGI(TAG, "[%s] Reading device state before applying changes", this->get_name().c_str());
+        this->update(); // This will read all current data
+        return; // Exit and let the next control call handle the changes
+      }
+
       if (call.get_target_temperature().has_value())
       {
+        // CRITICAL SAFETY CHECK: Ensure temperature data exists before modifying
+        if (!this->p_temperature->data)
+        {
+          ESP_LOGE(TAG, "[%s] Temperature data not available - cannot change temperature safely. Read temperature first.", this->get_name().c_str());
+          return;
+        }
+
         TemperatureData &t_data = (TemperatureData &)(*this->p_temperature->data);
+        
+        // Additional safety: Log the temperature change attempt
+        ESP_LOGW(TAG, "[%s] Changing target temperature from %.1f to %.1f", this->get_name().c_str(), t_data.target_temperature, *call.get_target_temperature());
+        
         t_data.target_temperature = *call.get_target_temperature();
 
         this->commands_.push(new Command(CommandType::WRITE, this->p_temperature));
@@ -79,7 +112,18 @@ namespace esphome
 
       if (call.get_mode().has_value())
       {
+        // CRITICAL SAFETY CHECK: Ensure settings data exists before modifying
+        if (!this->p_settings->data)
+        {
+          ESP_LOGE(TAG, "[%s] Settings data not available - cannot change mode safely. Read settings first.", this->get_name().c_str());
+          return;
+        }
+
         SettingsData &s_data = (SettingsData &)(*this->p_settings->data);
+        
+        // Additional safety: Log the mode change attempt
+        ESP_LOGW(TAG, "[%s] Changing mode from %d to %d", this->get_name().c_str(), (int)s_data.device_mode, (int)*call.get_mode());
+        
         s_data.device_mode = *call.get_mode();
 
         // update state immediately to avoid delays in HA UI
