@@ -74,7 +74,7 @@ namespace esphome
         ESP_LOGW(TAG, "[%s] Simultaneous mode and temperature change detected - handling mode first", this->get_name().c_str());
         
         // Handle mode change first
-        ClimateCall mode_call;
+        ClimateCall mode_call(this);
         mode_call.set_mode(*call.get_mode());
         this->control(mode_call);
         
