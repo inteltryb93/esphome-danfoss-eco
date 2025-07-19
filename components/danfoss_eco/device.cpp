@@ -67,6 +67,22 @@ namespace esphome
 
     void Device::control(const ClimateCall &call)
     {
+      // CRITICAL SAFETY: Prevent simultaneous mode and temperature changes
+      // This can cause data corruption if both operations modify overlapping device state
+      if (call.get_mode().has_value() && call.get_target_temperature().has_value())
+      {
+        ESP_LOGW(TAG, "[%s] Simultaneous mode and temperature change detected - handling mode first", this->get_name().c_str());
+        
+        // Handle mode change first
+        ClimateCall mode_call;
+        mode_call.set_mode(*call.get_mode());
+        this->control(mode_call);
+        
+        // Temperature change will be handled in the next Home Assistant poll cycle
+        ESP_LOGI(TAG, "[%s] Temperature change deferred to next cycle for safety", this->get_name().c_str());
+        return;
+      }
+
       // SAFETY: Always ensure we have current device state before making changes
       bool need_to_read_first = false;
       
@@ -100,14 +116,35 @@ namespace esphome
 
         TemperatureData &t_data = (TemperatureData &)(*this->p_temperature->data);
         
-        // Additional safety: Log the temperature change attempt
-        ESP_LOGW(TAG, "[%s] Changing target temperature from %.1f to %.1f", this->get_name().c_str(), t_data.target_temperature, *call.get_target_temperature());
+        // ENHANCED SAFETY: Validate temperature data integrity
+        float new_temp = *call.get_target_temperature();
+        if (t_data.target_temperature < 5.0f || t_data.target_temperature > 30.0f ||
+            t_data.room_temperature < -10.0f || t_data.room_temperature > 50.0f ||
+            new_temp < 5.0f || new_temp > 30.0f)
+        {
+          ESP_LOGE(TAG, "[%s] Temperature data appears corrupted (target:%.1f, room:%.1f, new:%.1f) - forcing refresh", 
+                   this->get_name().c_str(), t_data.target_temperature, t_data.room_temperature, new_temp);
+          this->update(); // Force a fresh read of all data
+          return;
+        }
         
-        t_data.target_temperature = *call.get_target_temperature();
+        // Additional safety: Log the temperature change attempt
+        ESP_LOGW(TAG, "[%s] Changing target temperature from %.1f to %.1f (room:%.1f)", 
+                 this->get_name().c_str(), t_data.target_temperature, new_temp, t_data.room_temperature);
+        
+        // CRITICAL: Only modify if the change is significant enough and data is valid
+        if (abs(t_data.target_temperature - new_temp) >= 0.1f)
+        {
+          t_data.target_temperature = new_temp;
 
-        this->commands_.push(new Command(CommandType::WRITE, this->p_temperature));
-        // initiate connection to the device
-        this->connect();
+          this->commands_.push(new Command(CommandType::WRITE, this->p_temperature));
+          // initiate connection to the device
+          this->connect();
+        }
+        else
+        {
+          ESP_LOGD(TAG, "[%s] Temperature change too small, skipping write", this->get_name().c_str());
+        }
       }
 
       if (call.get_mode().has_value())
@@ -121,18 +158,40 @@ namespace esphome
 
         SettingsData &s_data = (SettingsData &)(*this->p_settings->data);
         
-        // Additional safety: Log the mode change attempt
-        ESP_LOGW(TAG, "[%s] Changing mode from %d to %d", this->get_name().c_str(), (int)s_data.device_mode, (int)*call.get_mode());
+        // ENHANCED SAFETY: Validate settings data integrity before modification
+        if (s_data.temperature_min <= 0 || s_data.temperature_max <= 0 || 
+            s_data.temperature_min >= s_data.temperature_max ||
+            s_data.temperature_min < 5.0f || s_data.temperature_max > 30.0f)
+        {
+          ESP_LOGE(TAG, "[%s] Settings data appears corrupted (min:%.1f, max:%.1f) - forcing refresh", 
+                   this->get_name().c_str(), s_data.temperature_min, s_data.temperature_max);
+          this->update(); // Force a fresh read of all data
+          return;
+        }
         
-        s_data.device_mode = *call.get_mode();
+        // Additional safety: Log the mode change attempt with full context
+        ESP_LOGW(TAG, "[%s] Changing mode from %d to %d (min:%.1f, max:%.1f)", 
+                 this->get_name().c_str(), (int)s_data.device_mode, (int)*call.get_mode(),
+                 s_data.temperature_min, s_data.temperature_max);
+        
+        // CRITICAL: Only modify the mode if the current settings are valid
+        ClimateMode new_mode = *call.get_mode();
+        if (new_mode != s_data.device_mode)
+        {
+          s_data.device_mode = new_mode;
 
-        // update state immediately to avoid delays in HA UI
-        this->mode = s_data.device_mode;
-        this->publish_state();
+          // update state immediately to avoid delays in HA UI
+          this->mode = s_data.device_mode;
+          this->publish_state();
 
-        this->commands_.push(new Command(CommandType::WRITE, this->p_settings));
-        // initiate connection to the device
-        this->connect();
+          this->commands_.push(new Command(CommandType::WRITE, this->p_settings));
+          // initiate connection to the device
+          this->connect();
+        }
+        else
+        {
+          ESP_LOGD(TAG, "[%s] Mode unchanged, skipping write", this->get_name().c_str());
+        }
       }
     }
 
