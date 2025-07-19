@@ -39,8 +39,22 @@ namespace esphome
             TemperatureData(shared_ptr<Xxtea> &xxtea, uint8_t *raw_data, uint16_t value_len) : WritableData(8, xxtea)
             {
                 uint8_t *temperatures = decrypt(this->xxtea_, raw_data, value_len);
+                
+                // Log decrypted temperature bytes
+                ESP_LOGV("device_data", "TEMP BYTES: [0]=%02x [1]=%02x -> target=%.1f room=%.1f", 
+                         temperatures[0], temperatures[1], 
+                         temperatures[0] / 2.0f, temperatures[1] / 2.0f);
+                
                 this->target_temperature = temperatures[0] / 2.0f;
                 this->room_temperature = temperatures[1] / 2.0f;
+                
+                // Validate immediately after parsing
+                if (this->target_temperature < 0 || this->target_temperature > 50 ||
+                    this->room_temperature < -20 || this->room_temperature > 60)
+                {
+                    ESP_LOGE("device_data", "CORRUPT TEMP in constructor: target=%.1f room=%.1f (bytes: %02x %02x)", 
+                             this->target_temperature, this->room_temperature, temperatures[0], temperatures[1]);
+                }
             }
 
             void pack(uint8_t *buff)
@@ -48,7 +62,17 @@ namespace esphome
                 buff[0] = (uint8_t)(target_temperature * 2);
                 buff[1] = (uint8_t)(room_temperature * 2);
 
+                // Log before encryption
+                ESP_LOGV("device_data", "TEMP PACK: target=%.1f room=%.1f -> bytes[0]=%02x [1]=%02x", 
+                         target_temperature, room_temperature, buff[0], buff[1]);
+                ESP_LOGV("device_data", "TEMP PRE-ENCRYPT: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], buff[6], buff[7]);
+
                 encrypt(this->xxtea_, buff, length);
+                
+                // Log after encryption
+                ESP_LOGV("device_data", "TEMP POST-ENCRYPT: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], buff[6], buff[7]);
             }
         };
 
@@ -90,6 +114,11 @@ namespace esphome
             {
                 uint8_t *settings = decrypt(this->xxtea_, raw_data, value_len);
 
+                // Log decrypted settings bytes
+                ESP_LOGV("device_data", "SETTINGS BYTES[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         settings[0], settings[1], settings[2], settings[3],
+                         settings[4], settings[5], settings[6], settings[7]);
+
                 this->settings_ = (uint8_t *)malloc(length);
                 memcpy(this->settings_, (const char *)settings, length);
 
@@ -101,6 +130,19 @@ namespace esphome
 
                 this->vacation_from = parse_int(settings, 6);
                 this->vacation_to = parse_int(settings, 10);
+                
+                // Log parsed values
+                ESP_LOGV("device_data", "PARSED SETTINGS: min=%.1f max=%.1f mode=%d vacation=%.1f", 
+                         this->temperature_min, this->temperature_max, (int)settings[4], this->vacation_temperature);
+                         
+                // Validate immediately after parsing
+                if (this->temperature_min < 0 || this->temperature_min > 50 ||
+                    this->temperature_max < 0 || this->temperature_max > 50 ||
+                    this->temperature_min >= this->temperature_max)
+                {
+                    ESP_LOGE("device_data", "CORRUPT SETTINGS in constructor: min=%.1f max=%.1f (bytes: %02x %02x)", 
+                             this->temperature_min, this->temperature_max, settings[1], settings[2]);
+                }
             }
 
             ~SettingsData() { free(this->settings_); }
@@ -139,7 +181,21 @@ namespace esphome
                 write_int(buff, 6, this->vacation_from);
                 write_int(buff, 10, this->vacation_to);
 
+                // Log before encryption
+                ESP_LOGV("device_data", "SETTINGS PACK: min=%.1f max=%.1f mode=%d vacation=%.1f", 
+                         this->temperature_min, this->temperature_max, (int)this->device_mode, this->vacation_temperature);
+                ESP_LOGV("device_data", "SETTINGS PACK BYTES[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], buff[6], buff[7]);
+                ESP_LOGV("device_data", "SETTINGS PRE-ENCRYPT[8-15]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         buff[8], buff[9], buff[10], buff[11], buff[12], buff[13], buff[14], buff[15]);
+
                 encrypt(this->xxtea_, buff, length);
+                
+                // Log after encryption
+                ESP_LOGV("device_data", "SETTINGS POST-ENCRYPT[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], buff[6], buff[7]);
+                ESP_LOGV("device_data", "SETTINGS POST-ENCRYPT[8-15]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         buff[8], buff[9], buff[10], buff[11], buff[12], buff[13], buff[14], buff[15]);
             }
 
         private:

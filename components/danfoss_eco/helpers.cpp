@@ -75,21 +75,83 @@ namespace esphome
 
         uint8_t *encrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
         {
+            // Log input data
+            ESP_LOGV(TAG, "ENCRYPT INPUT[%d]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len,
+                     value_len > 0 ? value[0] : 0, value_len > 1 ? value[1] : 0,
+                     value_len > 2 ? value[2] : 0, value_len > 3 ? value[3] : 0,
+                     value_len > 4 ? value[4] : 0, value_len > 5 ? value[5] : 0,
+                     value_len > 6 ? value[6] : 0, value_len > 7 ? value[7] : 0);
+            
             uint8_t buffer[value_len];
             reverse_chunks(value, value_len, buffer);
 
+            // Log after reverse_chunks
+            ESP_LOGV(TAG, "AFTER REVERSE: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len > 0 ? buffer[0] : 0, value_len > 1 ? buffer[1] : 0,
+                     value_len > 2 ? buffer[2] : 0, value_len > 3 ? buffer[3] : 0,
+                     value_len > 4 ? buffer[4] : 0, value_len > 5 ? buffer[5] : 0,
+                     value_len > 6 ? buffer[6] : 0, value_len > 7 ? buffer[7] : 0);
+
             xxtea->encrypt(buffer, value_len);
+            
+            // Log after encryption
+            ESP_LOGV(TAG, "AFTER ENCRYPT: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len > 0 ? buffer[0] : 0, value_len > 1 ? buffer[1] : 0,
+                     value_len > 2 ? buffer[2] : 0, value_len > 3 ? buffer[3] : 0,
+                     value_len > 4 ? buffer[4] : 0, value_len > 5 ? buffer[5] : 0,
+                     value_len > 6 ? buffer[6] : 0, value_len > 7 ? buffer[7] : 0);
+            
             reverse_chunks(buffer, value_len, value);
+            
+            // Log final result
+            ESP_LOGV(TAG, "ENCRYPT OUTPUT: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len > 0 ? value[0] : 0, value_len > 1 ? value[1] : 0,
+                     value_len > 2 ? value[2] : 0, value_len > 3 ? value[3] : 0,
+                     value_len > 4 ? value[4] : 0, value_len > 5 ? value[5] : 0,
+                     value_len > 6 ? value[6] : 0, value_len > 7 ? value[7] : 0);
+            
             return value;
         }
 
         uint8_t *decrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
         {
+            // Log input data
+            ESP_LOGV(TAG, "DECRYPT INPUT[%d]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len,
+                     value_len > 0 ? value[0] : 0, value_len > 1 ? value[1] : 0,
+                     value_len > 2 ? value[2] : 0, value_len > 3 ? value[3] : 0,
+                     value_len > 4 ? value[4] : 0, value_len > 5 ? value[5] : 0,
+                     value_len > 6 ? value[6] : 0, value_len > 7 ? value[7] : 0);
+            
             uint8_t buffer[value_len];
             reverse_chunks(value, value_len, buffer);
 
+            // Log after reverse_chunks
+            ESP_LOGV(TAG, "AFTER REVERSE: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len > 0 ? buffer[0] : 0, value_len > 1 ? buffer[1] : 0,
+                     value_len > 2 ? buffer[2] : 0, value_len > 3 ? buffer[3] : 0,
+                     value_len > 4 ? buffer[4] : 0, value_len > 5 ? buffer[5] : 0,
+                     value_len > 6 ? buffer[6] : 0, value_len > 7 ? buffer[7] : 0);
+
             xxtea->decrypt(buffer, value_len);
+            
+            // Log after decryption
+            ESP_LOGV(TAG, "AFTER DECRYPT: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len > 0 ? buffer[0] : 0, value_len > 1 ? buffer[1] : 0,
+                     value_len > 2 ? buffer[2] : 0, value_len > 3 ? buffer[3] : 0,
+                     value_len > 4 ? buffer[4] : 0, value_len > 5 ? buffer[5] : 0,
+                     value_len > 6 ? buffer[6] : 0, value_len > 7 ? buffer[7] : 0);
+            
             reverse_chunks(buffer, value_len, value);
+            
+            // Log final result
+            ESP_LOGV(TAG, "DECRYPT OUTPUT: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     value_len > 0 ? value[0] : 0, value_len > 1 ? value[1] : 0,
+                     value_len > 2 ? value[2] : 0, value_len > 3 ? value[3] : 0,
+                     value_len > 4 ? value[4] : 0, value_len > 5 ? value[5] : 0,
+                     value_len > 6 ? value[6] : 0, value_len > 7 ? value[7] : 0);
+            
             return value;
         }
 

@@ -71,9 +71,20 @@ namespace esphome
 
         void TemperatureProperty::update_state(uint8_t *value, uint16_t value_len)
         {
+            // Log raw BLE data BEFORE decryption
+            ESP_LOGD(TAG, "[%s] TEMP RAW BLE[%d]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     this->component_->get_name().c_str(), value_len,
+                     value_len > 0 ? value[0] : 0, value_len > 1 ? value[1] : 0,
+                     value_len > 2 ? value[2] : 0, value_len > 3 ? value[3] : 0,
+                     value_len > 4 ? value[4] : 0, value_len > 5 ? value[5] : 0,
+                     value_len > 6 ? value[6] : 0, value_len > 7 ? value[7] : 0);
+            
             auto t_data = new TemperatureData(this->xxtea_, value, value_len);
             this->data.reset(t_data);
 
+            // Log processed data AFTER decryption
+            ESP_LOGD(TAG, "[%s] TEMP PROCESSED: room=%.1f target=%.1f", 
+                     this->component_->get_name().c_str(), t_data->room_temperature, t_data->target_temperature);
             ESP_LOGD(TAG, "[%s] Current room temperature: %2.1f°C, Set point temperature: %2.1f°C", this->component_->get_name().c_str(), t_data->room_temperature, t_data->target_temperature);
             if (this->component_->temperature() != nullptr)
                 this->component_->temperature()->publish_state(t_data->room_temperature);
@@ -88,10 +99,24 @@ namespace esphome
 
         void SettingsProperty::update_state(uint8_t *value, uint16_t value_len)
         {
+            // Log raw BLE data BEFORE decryption
+            ESP_LOGD(TAG, "[%s] SETTINGS RAW BLE[%d]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", 
+                     this->component_->get_name().c_str(), value_len,
+                     value_len > 0 ? value[0] : 0, value_len > 1 ? value[1] : 0,
+                     value_len > 2 ? value[2] : 0, value_len > 3 ? value[3] : 0,
+                     value_len > 4 ? value[4] : 0, value_len > 5 ? value[5] : 0,
+                     value_len > 6 ? value[6] : 0, value_len > 7 ? value[7] : 0,
+                     value_len > 8 ? value[8] : 0, value_len > 9 ? value[9] : 0,
+                     value_len > 10 ? value[10] : 0, value_len > 11 ? value[11] : 0,
+                     value_len > 12 ? value[12] : 0, value_len > 13 ? value[13] : 0,
+                     value_len > 14 ? value[14] : 0, value_len > 15 ? value[15] : 0);
+            
             auto s_data = new SettingsData(this->xxtea_, value, value_len);
             this->data.reset(s_data);
 
             const char *name = this->component_->get_name().c_str();
+            ESP_LOGD(TAG, "[%s] SETTINGS PROCESSED: min=%.1f max=%.1f mode=%d", 
+                     name, s_data->temperature_min, s_data->temperature_max, (int)s_data->device_mode);
             ESP_LOGD(TAG, "[%s] adaptable_regulation: %d", name, s_data->get_adaptable_regulation());
             ESP_LOGD(TAG, "[%s] vertical_intallation: %d", name, s_data->get_vertical_intallation());
             ESP_LOGD(TAG, "[%s] display_flip: %d", name, s_data->get_display_flip());

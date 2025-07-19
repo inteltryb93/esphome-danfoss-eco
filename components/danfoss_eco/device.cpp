@@ -105,13 +105,32 @@ namespace esphome
         TemperatureData &t_data = (TemperatureData &)(*this->p_temperature->data);
         float new_temp = *call.get_target_temperature();
         
-        // Validate data integrity
+        // DETAILED LOGGING: Analyze temperature data corruption
+        ESP_LOGD(TAG, "[%s] TEMP DEBUG: target=%.1f, room=%.1f, new=%.1f", 
+                 this->get_name().c_str(), t_data.target_temperature, t_data.room_temperature, new_temp);
+        
+        // Log raw memory contents to detect patterns
+        uint8_t *raw_data = (uint8_t*)&t_data;
+        ESP_LOGD(TAG, "[%s] TEMP RAW: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                 this->get_name().c_str(),
+                 raw_data[0], raw_data[1], raw_data[2], raw_data[3],
+                 raw_data[4], raw_data[5], raw_data[6], raw_data[7]);
+        
         if (t_data.target_temperature < 5.0f || t_data.target_temperature > 30.0f ||
-            t_data.room_temperature < -10.0f || t_data.room_temperature > 50.0f ||
-            new_temp < 5.0f || new_temp > 30.0f)
+            t_data.room_temperature < -10.0f || t_data.room_temperature > 50.0f)
         {
-          ESP_LOGE(TAG, "[%s] Corrupted temp data - refreshing", this->get_name().c_str());
+          ESP_LOGE(TAG, "[%s] CORRUPT TEMP DATA - target=%.1f room=%.1f", 
+                   this->get_name().c_str(), t_data.target_temperature, t_data.room_temperature);
+          ESP_LOGE(TAG, "[%s] DATA SOURCE: p_temperature->data=%p, size=%d", 
+                   this->get_name().c_str(), this->p_temperature->data.get(), 
+                   this->p_temperature->data ? sizeof(*this->p_temperature->data) : 0);
           this->update();
+          return;
+        }
+        
+        if (new_temp < 5.0f || new_temp > 30.0f)
+        {
+          ESP_LOGE(TAG, "[%s] INVALID NEW TEMP: %.1f (rejecting)", this->get_name().c_str(), new_temp);
           return;
         }
         
@@ -133,12 +152,30 @@ namespace esphome
 
         SettingsData &s_data = (SettingsData &)(*this->p_settings->data);
         
-        // Validate data integrity
+        // DETAILED LOGGING: Analyze settings data corruption
+        ESP_LOGD(TAG, "[%s] SETTINGS DEBUG: min=%.1f, max=%.1f, mode=%d", 
+                 this->get_name().c_str(), s_data.temperature_min, s_data.temperature_max, (int)s_data.device_mode);
+        ESP_LOGD(TAG, "[%s] VACATION DEBUG: temp=%.1f, from=%ld, to=%ld", 
+                 this->get_name().c_str(), s_data.vacation_temperature, s_data.vacation_from, s_data.vacation_to);
+        
+        // Log raw memory contents to detect patterns
+        uint8_t *raw_settings = (uint8_t*)&s_data;
+        ESP_LOGD(TAG, "[%s] SETTINGS RAW[0-15]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", 
+                 this->get_name().c_str(),
+                 raw_settings[0], raw_settings[1], raw_settings[2], raw_settings[3],
+                 raw_settings[4], raw_settings[5], raw_settings[6], raw_settings[7],
+                 raw_settings[8], raw_settings[9], raw_settings[10], raw_settings[11],
+                 raw_settings[12], raw_settings[13], raw_settings[14], raw_settings[15]);
+        
         if (s_data.temperature_min <= 0 || s_data.temperature_max <= 0 || 
             s_data.temperature_min >= s_data.temperature_max ||
             s_data.temperature_min < 5.0f || s_data.temperature_max > 30.0f)
         {
-          ESP_LOGE(TAG, "[%s] Corrupted settings - refreshing", this->get_name().c_str());
+          ESP_LOGE(TAG, "[%s] CORRUPT SETTINGS - min=%.1f max=%.1f", 
+                   this->get_name().c_str(), s_data.temperature_min, s_data.temperature_max);
+          ESP_LOGE(TAG, "[%s] DATA SOURCE: p_settings->data=%p, size=%d", 
+                   this->get_name().c_str(), this->p_settings->data.get(), 
+                   this->p_settings->data ? sizeof(*this->p_settings->data) : 0);
           this->update();
           return;
         }
