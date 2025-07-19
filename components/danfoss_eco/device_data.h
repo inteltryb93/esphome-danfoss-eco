@@ -27,7 +27,7 @@ namespace esphome
 
         struct WritableData : public DeviceData
         {
-            WritableData(uint16_t l, shared_ptr<Xxtea> &xxtea) : DeviceData(8, xxtea) {}
+            WritableData(uint16_t l, shared_ptr<Xxtea> &xxtea) : DeviceData(l, xxtea) {}
             virtual void pack(uint8_t *) = 0;
         };
 
