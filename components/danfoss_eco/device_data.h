@@ -114,10 +114,13 @@ namespace esphome
             {
                 uint8_t *settings = decrypt(this->xxtea_, raw_data, value_len);
 
-                // Log decrypted settings bytes
+                // Log decrypted settings bytes for full 16-byte structure
                 ESP_LOGV("device_data", "SETTINGS BYTES[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
                          settings[0], settings[1], settings[2], settings[3],
                          settings[4], settings[5], settings[6], settings[7]);
+                ESP_LOGV("device_data", "SETTINGS BYTES[8-15]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                         settings[8], settings[9], settings[10], settings[11],
+                         settings[12], settings[13], settings[14], settings[15]);
 
                 this->settings_ = (uint8_t *)malloc(length);
                 memcpy(this->settings_, (const char *)settings, length);
