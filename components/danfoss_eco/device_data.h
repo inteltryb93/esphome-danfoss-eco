@@ -184,12 +184,12 @@ namespace esphome
                 // Log before encryption
                 ESP_LOGV("device_data", "SETTINGS PACK: min=%.1f max=%.1f mode=%d vacation=%.1f", 
                          this->temperature_min, this->temperature_max, (int)this->device_mode, this->vacation_temperature);
-                ESP_LOGV("device_data", "SETTINGS PACK BYTES[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                ESP_LOGV("device_data", "SETTINGS PRE-ENCRYPT[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
                          buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], buff[6], buff[7]);
                 ESP_LOGV("device_data", "SETTINGS PRE-ENCRYPT[8-15]: %02x %02x %02x %02x %02x %02x %02x %02x", 
                          buff[8], buff[9], buff[10], buff[11], buff[12], buff[13], buff[14], buff[15]);
 
-                encrypt(this->xxtea_, buff, length);
+                encrypt(this->xxtea_, buff, length);  // length = 16, not 8!
                 
                 // Log after encryption
                 ESP_LOGV("device_data", "SETTINGS POST-ENCRYPT[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x", 
