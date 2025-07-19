@@ -144,8 +144,36 @@ namespace esphome
         }
         
         ClimateMode new_mode = *call.get_mode();
-        if (new_mode != s_data.device_mode)
+        ClimateMode current_mode = s_data.device_mode;
+        
+        // CRITICAL SAFETY: Prevent AUTO mode if vacation dates are invalid
+        if (new_mode == ClimateMode::CLIMATE_MODE_AUTO)
         {
+          // When switching to AUTO (scheduled mode), ensure vacation dates are sane
+          time_t now = time(nullptr);
+          if (s_data.vacation_from > now + (365 * 24 * 3600) || // Future date more than 1 year
+              s_data.vacation_to > now + (365 * 24 * 3600) ||
+              (s_data.vacation_from > 0 && s_data.vacation_to > 0 && s_data.vacation_from >= s_data.vacation_to))
+          {
+            ESP_LOGE(TAG, "[%s] Invalid vacation dates - clearing before AUTO mode", this->get_name().c_str());
+            s_data.vacation_from = 0;
+            s_data.vacation_to = 0;
+          }
+          
+          // Ensure vacation temperature is reasonable
+          if (s_data.vacation_temperature < 5.0f || s_data.vacation_temperature > 30.0f)
+          {
+            ESP_LOGW(TAG, "[%s] Fixing vacation temperature %.1f -> 15.0", this->get_name().c_str(), s_data.vacation_temperature);
+            s_data.vacation_temperature = 15.0f; // Safe default
+          }
+        }
+        
+        if (new_mode != current_mode)
+        {
+          ESP_LOGW(TAG, "[%s] Mode %d->%d (vacation: %.1f°C, dates: %ld-%ld)", 
+                   this->get_name().c_str(), (int)current_mode, (int)new_mode,
+                   s_data.vacation_temperature, s_data.vacation_from, s_data.vacation_to);
+          
           s_data.device_mode = new_mode;
           this->mode = s_data.device_mode;
           this->publish_state();
