@@ -78,22 +78,6 @@ namespace esphome
         return;
       }
 
-      // SAFETY: Ensure we have current device state before making changes
-      bool need_to_read_first = false;
-      
-      if (call.get_target_temperature().has_value() && !this->p_temperature->data)
-        need_to_read_first = true;
-      
-      if (call.get_mode().has_value() && !this->p_settings->data)
-        need_to_read_first = true;
-      
-      if (need_to_read_first)
-      {
-        ESP_LOGI(TAG, "[%s] Reading device state first", this->get_name().c_str());
-        this->update();
-        return;
-      }
-
       if (call.get_target_temperature().has_value())
       {
         if (!this->p_temperature->data)
@@ -104,29 +88,6 @@ namespace esphome
 
         TemperatureData &t_data = (TemperatureData &)(*this->p_temperature->data);
         float new_temp = *call.get_target_temperature();
-        
-        // DETAILED LOGGING: Analyze temperature data corruption
-        ESP_LOGD(TAG, "[%s] TEMP DEBUG: target=%.1f, room=%.1f, new=%.1f", 
-                 this->get_name().c_str(), t_data.target_temperature, t_data.room_temperature, new_temp);
-        
-        // Log raw memory contents to detect patterns
-        uint8_t *raw_data = (uint8_t*)&t_data;
-        ESP_LOGD(TAG, "[%s] TEMP RAW: %02x %02x %02x %02x %02x %02x %02x %02x", 
-                 this->get_name().c_str(),
-                 raw_data[0], raw_data[1], raw_data[2], raw_data[3],
-                 raw_data[4], raw_data[5], raw_data[6], raw_data[7]);
-        
-        if (t_data.target_temperature < 5.0f || t_data.target_temperature > 30.0f ||
-            t_data.room_temperature < -10.0f || t_data.room_temperature > 50.0f)
-        {
-          ESP_LOGE(TAG, "[%s] CORRUPT TEMP DATA - target=%.1f room=%.1f", 
-                   this->get_name().c_str(), t_data.target_temperature, t_data.room_temperature);
-          ESP_LOGE(TAG, "[%s] DATA SOURCE: p_temperature->data=%p, size=%d", 
-                   this->get_name().c_str(), this->p_temperature->data.get(), 
-                   this->p_temperature->data ? sizeof(*this->p_temperature->data) : 0);
-          this->update();
-          return;
-        }
         
         if (new_temp < 5.0f || new_temp > 30.0f)
         {
@@ -151,65 +112,12 @@ namespace esphome
         }
 
         SettingsData &s_data = (SettingsData &)(*this->p_settings->data);
-        
-        // DETAILED LOGGING: Analyze settings data corruption
-        ESP_LOGD(TAG, "[%s] SETTINGS DEBUG: min=%.1f, max=%.1f, mode=%d", 
-                 this->get_name().c_str(), s_data.temperature_min, s_data.temperature_max, (int)s_data.device_mode);
-        ESP_LOGD(TAG, "[%s] VACATION DEBUG: temp=%.1f, from=%ld, to=%ld", 
-                 this->get_name().c_str(), s_data.vacation_temperature, s_data.vacation_from, s_data.vacation_to);
-        
-        // Log raw memory contents to detect patterns
-        uint8_t *raw_settings = (uint8_t*)&s_data;
-        ESP_LOGD(TAG, "[%s] SETTINGS RAW[0-15]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", 
-                 this->get_name().c_str(),
-                 raw_settings[0], raw_settings[1], raw_settings[2], raw_settings[3],
-                 raw_settings[4], raw_settings[5], raw_settings[6], raw_settings[7],
-                 raw_settings[8], raw_settings[9], raw_settings[10], raw_settings[11],
-                 raw_settings[12], raw_settings[13], raw_settings[14], raw_settings[15]);
-        
-        if (s_data.temperature_min <= 0 || s_data.temperature_max <= 0 || 
-            s_data.temperature_min >= s_data.temperature_max ||
-            s_data.temperature_min < 5.0f || s_data.temperature_max > 30.0f)
-        {
-          ESP_LOGE(TAG, "[%s] CORRUPT SETTINGS - min=%.1f max=%.1f", 
-                   this->get_name().c_str(), s_data.temperature_min, s_data.temperature_max);
-          ESP_LOGE(TAG, "[%s] DATA SOURCE: p_settings->data=%p, size=%d", 
-                   this->get_name().c_str(), this->p_settings->data.get(), 
-                   this->p_settings->data ? sizeof(*this->p_settings->data) : 0);
-          this->update();
-          return;
-        }
-        
         ClimateMode new_mode = *call.get_mode();
         ClimateMode current_mode = s_data.device_mode;
         
-        // CRITICAL SAFETY: Prevent AUTO mode if vacation dates are invalid
-        if (new_mode == ClimateMode::CLIMATE_MODE_AUTO)
-        {
-          // When switching to AUTO (scheduled mode), ensure vacation dates are sane
-          time_t now = time(nullptr);
-          if (s_data.vacation_from > now + (365 * 24 * 3600) || // Future date more than 1 year
-              s_data.vacation_to > now + (365 * 24 * 3600) ||
-              (s_data.vacation_from > 0 && s_data.vacation_to > 0 && s_data.vacation_from >= s_data.vacation_to))
-          {
-            ESP_LOGE(TAG, "[%s] Invalid vacation dates - clearing before AUTO mode", this->get_name().c_str());
-            s_data.vacation_from = 0;
-            s_data.vacation_to = 0;
-          }
-          
-          // Ensure vacation temperature is reasonable
-          if (s_data.vacation_temperature < 5.0f || s_data.vacation_temperature > 30.0f)
-          {
-            ESP_LOGW(TAG, "[%s] Fixing vacation temperature %.1f -> 15.0", this->get_name().c_str(), s_data.vacation_temperature);
-            s_data.vacation_temperature = 15.0f; // Safe default
-          }
-        }
-        
         if (new_mode != current_mode)
         {
-          ESP_LOGW(TAG, "[%s] Mode %d->%d (vacation: %.1f°C, dates: %ld-%ld)", 
-                   this->get_name().c_str(), (int)current_mode, (int)new_mode,
-                   s_data.vacation_temperature, s_data.vacation_from, s_data.vacation_to);
+          ESP_LOGD(TAG, "[%s] Mode change: %d -> %d", this->get_name().c_str(), (int)current_mode, (int)new_mode);
           
           s_data.device_mode = new_mode;
           this->mode = s_data.device_mode;
