@@ -74,14 +74,10 @@ namespace esphome
 
         uint8_t *encrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
         {
-            uint8_t buffer[value_len], enc_buff[value_len];
+            uint8_t buffer[value_len];
             reverse_chunks(value, value_len, buffer);
-
-            auto xxtea_status = xxtea->encrypt(buffer, value_len, enc_buff, (size_t *)&value_len);
-            if (xxtea_status != XXTEA_STATUS_SUCCESS)
-                ESP_LOGW(TAG, "xxtea_encrypt failed, status=%d", xxtea_status);
-            else
-                reverse_chunks(enc_buff, value_len, value);
+            xxtea->encrypt(buffer, value_len);
+            reverse_chunks(buffer, value_len, value);
             return value;
         }
 
@@ -89,12 +85,8 @@ namespace esphome
         {
             uint8_t buffer[value_len];
             reverse_chunks(value, value_len, buffer);
-
-            auto xxtea_status = xxtea->decrypt(buffer, value_len);
-            if (xxtea_status != XXTEA_STATUS_SUCCESS)
-                ESP_LOGW(TAG, "xxtea_decrypt failed, status=%d", xxtea_status);
-            else
-                reverse_chunks(buffer, value_len, value);
+            xxtea->decrypt(buffer, value_len);
+            reverse_chunks(buffer, value_len, value);
             return value;
         }
 

@@ -1,4 +1,5 @@
 #include "device.h"
+#include <cmath>
 
 #ifdef USE_ESP32
 
@@ -67,28 +68,63 @@ namespace esphome
 
     void Device::control(const ClimateCall &call)
     {
+      // CRITICAL SAFETY: Prevent simultaneous mode and temperature changes
+      if (call.get_mode().has_value() && call.get_target_temperature().has_value())
+      {
+        ESP_LOGW(TAG, "[%s] Handling mode first, temp deferred", this->get_name().c_str());
+        ClimateCall mode_call(this);
+        mode_call.set_mode(*call.get_mode());
+        this->control(mode_call);
+        return;
+      }
+
       if (call.get_target_temperature().has_value())
       {
-        TemperatureData &t_data = (TemperatureData &)(*this->p_temperature->data);
-        t_data.target_temperature = *call.get_target_temperature();
+        if (!this->p_temperature->data)
+        {
+          ESP_LOGE(TAG, "[%s] No temperature data - read first", this->get_name().c_str());
+          return;
+        }
 
-        this->commands_.push(new Command(CommandType::WRITE, this->p_temperature));
-        // initiate connection to the device
-        this->connect();
+        TemperatureData &t_data = (TemperatureData &)(*this->p_temperature->data);
+        float new_temp = *call.get_target_temperature();
+        
+        if (new_temp < 5.0f || new_temp > 30.0f)
+        {
+          ESP_LOGE(TAG, "[%s] INVALID NEW TEMP: %.1f (rejecting)", this->get_name().c_str(), new_temp);
+          return;
+        }
+        
+        if (std::abs(t_data.target_temperature - new_temp) >= 0.1f)
+        {
+          t_data.target_temperature = new_temp;
+          this->commands_.push(new Command(CommandType::WRITE, this->p_temperature));
+          this->connect();
+        }
       }
 
       if (call.get_mode().has_value())
       {
+        if (!this->p_settings->data)
+        {
+          ESP_LOGE(TAG, "[%s] No settings data - read first", this->get_name().c_str());
+          return;
+        }
+
         SettingsData &s_data = (SettingsData &)(*this->p_settings->data);
-        s_data.device_mode = *call.get_mode();
-
-        // update state immediately to avoid delays in HA UI
-        this->mode = s_data.device_mode;
-        this->publish_state();
-
-        this->commands_.push(new Command(CommandType::WRITE, this->p_settings));
-        // initiate connection to the device
-        this->connect();
+        ClimateMode new_mode = *call.get_mode();
+        ClimateMode current_mode = s_data.device_mode;
+        
+        if (new_mode != current_mode)
+        {
+          ESP_LOGD(TAG, "[%s] Mode change: %d -> %d", this->get_name().c_str(), (int)current_mode, (int)new_mode);
+          
+          s_data.device_mode = new_mode;
+          this->mode = s_data.device_mode;
+          this->publish_state();
+          this->commands_.push(new Command(CommandType::WRITE, this->p_settings));
+          this->connect();
+        }
       }
     }
 
