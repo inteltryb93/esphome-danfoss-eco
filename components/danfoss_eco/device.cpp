@@ -21,7 +21,6 @@ namespace esphome
       this->properties = {this->p_pin, this->p_battery, this->p_temperature, this->p_settings, this->p_errors, this->p_secret_key};
       // pretend, we have already discovered the device
       copy_address(this->parent()->get_address(), this->parent()->get_remote_bda());
-      this->parent()->set_state(ClientState::INIT);
     }
 
     void Device::loop()
@@ -243,7 +242,7 @@ namespace esphome
 
     void Device::connect()
     {
-      if (this->node_state == ClientState::INIT || this->node_state == ClientState::ESTABLISHED)
+      if (this->node_state == ClientState::ESTABLISHED)
       {
         return;
       }
