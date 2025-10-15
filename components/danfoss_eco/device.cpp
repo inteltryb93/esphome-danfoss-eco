@@ -257,7 +257,12 @@ namespace esphome
         parent()->set_enabled(true);
       }
       // gap scanning interferes with connection attempts, which results in esp_gatt_status_t::ESP_GATT_ERROR (0x85)
+<<<<<<< HEAD
       this->parent()->set_state(ClientState::READY_TO_CONNECT); // this will cause ble_client to attempt connect() from its loop()
+=======
+      esp_ble_gap_stop_scanning();
+      this->parent()->connect(); // trigger BLE connection attempt
+>>>>>>> 49bf77d (ClientState::READY_TO_CONNECT doesn't exist in the current version of ESPHome)
     }
 
     void Device::disconnect()
