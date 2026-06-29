@@ -3,7 +3,11 @@
 
 #include "helpers.h"
 
+// ESP-IDF's <sys/param.h> already defines MIN on some targets (e.g. ESP32-C3/riscv), so guard it
+// to avoid a "MIN redefined" warning.
+#ifndef MIN
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+#endif
 namespace esphome
 {
     namespace danfoss_eco

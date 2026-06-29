@@ -131,3 +131,6 @@ sdkconfig.*
 
 # Claude Code session-local settings
 .claude/
+
+# Konfiguracje urządzeń z poświadczeniami (NIE commitować)
+device_sterownik.yaml
