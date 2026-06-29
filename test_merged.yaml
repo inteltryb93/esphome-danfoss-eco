@@ -1,0 +1,47 @@
+# Minimal validation config for the merged danfoss_eco component.
+# Targets the esp-idf framework (per task requirement) on a plain ESP32.
+# The MAC / pin / secret_key are placeholders - they only need to be syntactically valid for
+# `esphome config` and `esphome compile`; no real hardware is contacted at build time.
+esphome:
+  name: danfoss-eco-merged-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: VERBOSE
+
+# Local copy of the merged component under ./components
+external_components:
+  - source:
+      type: local
+      path: components
+
+esp32_ble_tracker:
+
+# Also pull in the danfoss_eco_scanner component so this single build compile-validates it too.
+sensor:
+  - platform: danfoss_eco_scanner
+    id: scanner
+
+ble_client:
+  - mac_address: 00:04:2F:11:22:33
+    id: eco_client
+
+climate:
+  - platform: danfoss_eco
+    name: "Test eTRV"
+    ble_client_id: eco_client
+    pin_code: "0000"
+    secret_key: deadbeefcafebabedeadbeefcafebabe
+    update_interval: 30min
+    battery_level:
+      name: "Test eTRV Battery"
+    temperature:
+      name: "Test eTRV Temperature"
+    problems:
+      name: "Test eTRV Problems"
+    problems_detail:
+      name: "Test eTRV Problems Detail"

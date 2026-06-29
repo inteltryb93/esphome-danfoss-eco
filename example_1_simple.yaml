@@ -1,0 +1,37 @@
+esphome:
+  name: etrv2wifi
+  comment: Extend Danfoss ECO eTRV BLE range over WiFi with ESPHome
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: "my-ssid"
+  password: "my-password"
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+ble_client:
+  - mac_address: 00:04:2f:xx:xx:xx
+    id: room_eco2
+
+climate:
+  - platform: danfoss_eco
+    name: "My Room eTRV"
+    ble_client_id: room_eco2
+    pin_code: "0000"
+    secret_key: deadbeefcafebabedeadbeefcafebabe
+    battery_level:
+      name: "My Room eTRV Battery Level"
+    temperature:
+      name: "My Room eTRV Temperature"
+    problems:
+      name: "My Room eTRV Problems"
+    problems_detail:
+      name: "My Room eTRV Problems Detail"
+    update_interval: 30min
