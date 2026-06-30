@@ -59,8 +59,10 @@ def validate_pin(value):
 CONFIG_SCHEMA = (
     climate.climate_schema(DanfossEco).extend(
         {
-            cv.Optional(CONF_SECRET_KEY): validate_secret,
-            cv.Optional(CONF_PIN_CODE): validate_pin,
+            # Mark credentials as sensitive for deterministic redaction in config dumps/logs
+            # (replaces the legacy substring heuristic, removed in ESPHome 2026.12.0).
+            cv.Optional(CONF_SECRET_KEY): cv.sensitive(validate_secret),
+            cv.Optional(CONF_PIN_CODE): cv.sensitive(validate_pin),
             cv.Optional(CONF_BATTERY_LEVEL): sensor.sensor_schema(
                 unit_of_measurement=UNIT_PERCENT,
                 accuracy_decimals=0,

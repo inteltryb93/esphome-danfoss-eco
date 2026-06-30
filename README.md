@@ -31,6 +31,8 @@ It uses the ESP32 BLE peripheral, so a ``ble_client`` configuration must be prov
 >   framework:
 >     type: esp-idf
 > ```
+> The component compiles warning-free on the default ESP-IDF (5.5.x) and has been verified clean on
+> **ESP-IDF 6.0.1** (GCC 15.2.0, ESP32-C3). To pin that version add `version: 6.0.1` under `framework:`.
 
 Onboarding your device
 ------------------------
