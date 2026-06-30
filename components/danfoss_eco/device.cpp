@@ -163,7 +163,14 @@ namespace esphome
         if (param->open.status == ESP_GATT_OK)
           ESP_LOGV(TAG, "[%s] open, conn_id=%d", this->get_name().c_str(), param->open.conn_id);
         else
-          ESP_LOGW(TAG, "[%s] failed to open, conn_id=%d, status=%#04x", this->get_name().c_str(), param->open.conn_id, param->open.status);
+        {
+          // Connection failed to open (e.g. ESP_GATT_ERROR 0x85 when the BLE controller runs out of
+          // connection slots during a burst of simultaneous connects). Release this client and reset
+          // node_state to IDLE so the next update()/control() retries from a clean state. The queued
+          // command (target temperature / settings) is preserved and runs on the next successful open.
+          ESP_LOGW(TAG, "[%s] failed to open, conn_id=%d, status=%#04x - resetting client for clean retry", this->get_name().c_str(), param->open.conn_id, param->open.status);
+          this->disconnect();
+        }
         break;
 
       case ESP_GATTC_CLOSE_EVT:
