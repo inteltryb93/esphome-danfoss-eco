@@ -163,14 +163,13 @@ namespace esphome
         if (param->open.status == ESP_GATT_OK)
           ESP_LOGV(TAG, "[%s] open, conn_id=%d", this->get_name().c_str(), param->open.conn_id);
         else
-        {
-          // Connection failed to open (e.g. ESP_GATT_ERROR 0x85 when the BLE controller runs out of
-          // connection slots during a burst of simultaneous connects). Release this client and reset
-          // node_state to IDLE so the next update()/control() retries from a clean state. The queued
-          // command (target temperature / settings) is preserved and runs on the next successful open.
-          ESP_LOGW(TAG, "[%s] failed to open, conn_id=%d, status=%#04x - resetting client for clean retry", this->get_name().c_str(), param->open.conn_id, param->open.status);
-          this->disconnect();
-        }
+          // A failed open (e.g. transient ESP_GATT_ERROR 0x85) is only logged here. Do NOT call
+          // disconnect()/set_enabled(false): the ble_client must stay enabled so that auto_connect
+          // (the scanner's parse_device path) can re-establish the connection once the eTRV advertises
+          // again. Disabling it here permanently parks the client - with a long update_interval the
+          // device would never reconnect. (This reverts an earlier "clean retry" attempt that broke
+          // recovery.)
+          ESP_LOGW(TAG, "[%s] failed to open, conn_id=%d, status=%#04x", this->get_name().c_str(), param->open.conn_id, param->open.status);
         break;
 
       case ESP_GATTC_CLOSE_EVT:
