@@ -27,7 +27,7 @@ from esphome.const import (
     DEVICE_CLASS_PROBLEM
 )
 
-CODEOWNERS = ["@dmitry-cherkas", "@tryb103"]
+CODEOWNERS = ["@dmitry-cherkas", "@inteltryb93"]
 DEPENDENCIES = ["ble_client"]
 # load zero-configuration dependencies automatically
 AUTO_LOAD = ["sensor", "binary_sensor", "text_sensor", "esp32_ble_tracker"]

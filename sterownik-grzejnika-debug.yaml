@@ -18,7 +18,7 @@ esphome:
   name: ${display_name}
   min_version: 2026.9.0
   project:
-    name: tryb103.danfoss_eco_merge
+    name: inteltryb93.esphome-danfoss-eco
     version: "2.0.0"
   platformio_options:
     board_build.mcu: esp32c3

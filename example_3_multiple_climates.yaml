@@ -21,7 +21,7 @@ wifi:
 external_components:
   - source:
       type: git
-      url: https://github.com/tryb103/danfoss_eco_merge
+      url: https://github.com/inteltryb93/esphome-danfoss-eco
     components: [danfoss_eco]
 
 esp32_ble:
