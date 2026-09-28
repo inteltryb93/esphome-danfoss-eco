@@ -134,3 +134,7 @@ sdkconfig.*
 
 # Konfiguracje urządzeń z poświadczeniami (NIE commitować)
 device_sterownik.yaml
+
+# ESPHome secrets (WiFi, eTRV PIN codes and keys) and the local ESPHome checkout / build output
+secrets.yaml
+/esphome/

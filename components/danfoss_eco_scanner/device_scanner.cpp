@@ -24,7 +24,9 @@ namespace esphome
             if (name.length() <= s_len || name.compare(name.length() - s_len, s_len, eTRV_SUFFIX) != 0)
                 return false;
 
-            ESP_LOGI(TAG, "Found Danfoss eTRV, MAC: %s, Name: %s", device.address_str().c_str(), name.c_str());
+            // address_str() is deprecated since ESPHome 2026.8.0 (removed in 2027.2.0)
+            char addr[MAC_ADDRESS_PRETTY_BUFFER_SIZE];
+            ESP_LOGI(TAG, "Found Danfoss eTRV, MAC: %s, Name: %s", device.address_str_to(addr), name.c_str());
 
             uint8_t flags = (uint8_t)name.c_str()[0];
             if ((flags & 0x4) >> 2)

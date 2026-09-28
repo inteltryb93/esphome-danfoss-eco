@@ -16,11 +16,15 @@ namespace esphome
             // which writes into a caller-provided char[UUID_STR_LEN] buffer and returns it.
             char svc_buf[UUID_STR_LEN], chr_buf[UUID_STR_LEN];
             ESP_LOGV(TAG, "[%s] resolving handler for service=%s, characteristic=%s", this->component_->get_name().c_str(), this->service_uuid.to_str(svc_buf), this->characteristic_uuid.to_str(chr_buf));
+            this->handle = INVALID_HANDLE;
             auto chr = client->get_characteristic(this->service_uuid, this->characteristic_uuid);
             if (chr == nullptr)
             {
                 char buf[UUID_STR_LEN];
-                ESP_LOGW(TAG, "[%s] characteristic uuid=%s not found", this->component_->get_name().c_str(), this->characteristic_uuid.to_str(buf));
+                if (this->essential())
+                    ESP_LOGW(TAG, "[%s] characteristic uuid=%s not found", this->component_->get_name().c_str(), this->characteristic_uuid.to_str(buf));
+                else
+                    ESP_LOGD(TAG, "[%s] optional characteristic uuid=%s not present", this->component_->get_name().c_str(), this->characteristic_uuid.to_str(buf));
                 return false;
             }
 
@@ -30,6 +34,12 @@ namespace esphome
 
         bool DeviceProperty::read_request(BLEClient *client)
         {
+            if (!this->has_handle())
+            {
+                ESP_LOGW(TAG, "[%s] read_request: characteristic handle not resolved, skipping", this->component_->get_name().c_str());
+                return false;
+            }
+            ESP_LOGV(TAG, "[%s] read_request: handle=%#04x conn_id=%d", this->component_->get_name().c_str(), this->handle, client->get_conn_id());
             auto status = esp_ble_gattc_read_char(client->get_gattc_if(),
                                                   client->get_conn_id(),
                                                   this->handle,
@@ -40,9 +50,14 @@ namespace esphome
             return status == ESP_OK;
         }
 
-        bool WritableProperty::write_request(BLEClient *client, uint8_t *data, uint16_t data_len)
+        bool WritableProperty::write_request(BLEClient *client, uint8_t *data, uint16_t data_len, bool log_data)
         {
-            ESP_LOGD(TAG, "[%s] write_request: handle=%#04x, data=%s", this->component_->get_name().c_str(), this->handle, format_hex_pretty(data, data_len).c_str());
+            if (!this->has_handle())
+            {
+                ESP_LOGW(TAG, "[%s] write_request: characteristic handle not resolved, skipping", this->component_->get_name().c_str());
+                return false;
+            }
+            ESP_LOGV(TAG, "[%s] write_request: handle=%#04x, data=%s", this->component_->get_name().c_str(), this->handle, log_data ? format_hex_pretty(data, data_len).c_str() : "(not logged)");
 
             auto status = esp_ble_gattc_write_char(client->get_gattc_if(),
                                                    client->get_conn_id(),
@@ -57,129 +72,142 @@ namespace esphome
             return status == ESP_OK;
         }
 
-        bool WritableProperty::write_request(BLEClient *client)
+        static void publish_binary(BinarySensor *s, bool state)
         {
-            WritableData *writableData = static_cast<WritableData *>(this->data.get());
-            uint8_t buff[this->data->length]{0};
-            writableData->pack(buff);
-            return this->write_request(client, buff, sizeof(buff));
+            if (s != nullptr)
+                s->publish_state(state);
         }
 
-        void BatteryProperty::update_state(uint8_t *value, uint16_t value_len)
+        static void publish_sensor(Sensor *s, float state)
+        {
+            if (s != nullptr)
+                s->publish_state(state);
+        }
+
+        bool BatteryProperty::update_state(uint8_t *value, uint16_t value_len)
         {
             uint8_t battery_level = value[0];
+            if (battery_level > 100)
+            {
+                ESP_LOGW(TAG, "[%s] implausible battery level %u %%, ignoring", this->component_->get_name().c_str(), battery_level);
+                return false;
+            }
             ESP_LOGD(TAG, "[%s] battery level: %d %%", this->component_->get_name().c_str(), battery_level);
-            if (this->component_->battery_level() != nullptr)
-                this->component_->battery_level()->publish_state(battery_level);
+            publish_sensor(this->component_->battery_level(), battery_level);
+            return true;
         }
 
-        void TemperatureProperty::update_state(uint8_t *value, uint16_t value_len)
+        static const char *const WRONG_KEY_HINT = "decrypted data is implausible - wrong secret_key?";
+
+        bool TemperatureProperty::update_state(uint8_t *value, uint16_t value_len)
         {
-            // Log raw BLE data BEFORE decryption (helps debug encryption / key issues).
-            ESP_LOGD(TAG, "[%s] TEMP RAW BLE[%d]: %s", this->component_->get_name().c_str(), value_len, format_hex_pretty(value, value_len).c_str());
+            const char *name = this->component_->get_name().c_str();
+            ESP_LOGV(TAG, "[%s] TEMP RAW BLE[%d]: %s", name, value_len, format_hex_pretty(value, value_len).c_str());
 
             auto t_data = new TemperatureData(this->xxtea_, value, value_len);
+            if (!t_data->valid)
+            {
+                ESP_LOGE(TAG, "[%s] temperature: %s (decrypted %s)", name, WRONG_KEY_HINT, format_hex_pretty(t_data->raw_, t_data->length).c_str());
+                delete t_data;
+                return false;
+            }
             this->data.reset(t_data);
+            ESP_LOGV(TAG, "[%s] TEMP DECRYPTED: %s", name, format_hex_pretty(t_data->raw_, t_data->length).c_str());
+            ESP_LOGD(TAG, "[%s] TEMP PROCESSED: room=%.1f target=%.1f", name, t_data->room_temperature, t_data->target_temperature);
 
-            // Log processed data AFTER decryption.
-            ESP_LOGD(TAG, "[%s] TEMP PROCESSED: room=%.1f target=%.1f", this->component_->get_name().c_str(), t_data->room_temperature, t_data->target_temperature);
-            ESP_LOGD(TAG, "[%s] Current room temperature: %2.1f°C, Set point temperature: %2.1f°C", this->component_->get_name().c_str(), t_data->room_temperature, t_data->target_temperature);
-            if (this->component_->temperature() != nullptr)
-                this->component_->temperature()->publish_state(t_data->room_temperature);
+            publish_sensor(this->component_->temperature(), t_data->room_temperature);
 
-            // apply read configuration to the component
-            // TODO component->action should consider "open window detection" feature of Danfoss Eco
-            this->component_->action = (t_data->room_temperature > t_data->target_temperature) ? climate::ClimateAction::CLIMATE_ACTION_IDLE : climate::ClimateAction::CLIMATE_ACTION_HEATING;
             this->component_->target_temperature = t_data->target_temperature;
             this->component_->current_temperature = t_data->room_temperature;
-            this->component_->publish_state();
+            this->component_->publish_climate_state();
+            return true;
         }
 
-        void SettingsProperty::update_state(uint8_t *value, uint16_t value_len)
+        bool SettingsProperty::update_state(uint8_t *value, uint16_t value_len)
         {
-            // Log raw BLE data BEFORE decryption. The settings characteristic is the 16-byte
-            // structure that the old `DeviceData(8, ...)` bug used to truncate, so logging the full
-            // raw payload here is especially useful for debugging.
-            ESP_LOGD(TAG, "[%s] SETTINGS RAW BLE[%d]: %s", this->component_->get_name().c_str(), value_len, format_hex_pretty(value, value_len).c_str());
+            const char *name = this->component_->get_name().c_str();
+            ESP_LOGV(TAG, "[%s] SETTINGS RAW BLE[%d]: %s", name, value_len, format_hex_pretty(value, value_len).c_str());
 
             auto s_data = new SettingsData(this->xxtea_, value, value_len);
+            if (!s_data->valid)
+            {
+                // Never keep (and therefore never write back) a settings block that does not look like
+                // a real one: writing garbage here is what "resets the valve" (upstream issue #11).
+                ESP_LOGE(TAG, "[%s] settings: %s (decrypted %s)", name, WRONG_KEY_HINT, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+                delete s_data;
+                return false;
+            }
             this->data.reset(s_data);
 
-            const char *name = this->component_->get_name().c_str();
-            ESP_LOGD(TAG, "[%s] SETTINGS PROCESSED: min=%.1f max=%.1f mode=%d", name, s_data->temperature_min, s_data->temperature_max, (int)s_data->device_mode);
-            ESP_LOGD(TAG, "[%s] adaptable_regulation: %d", name, s_data->get_adaptable_regulation());
-            ESP_LOGD(TAG, "[%s] vertical_intallation: %d", name, s_data->get_vertical_intallation());
-            ESP_LOGD(TAG, "[%s] display_flip: %d", name, s_data->get_display_flip());
-            ESP_LOGD(TAG, "[%s] slow_regulation: %d", name, s_data->get_slow_regulation());
-            ESP_LOGD(TAG, "[%s] valve_installed: %d", name, s_data->get_valve_installed());
-            ESP_LOGD(TAG, "[%s] lock_control: %d", name, s_data->get_lock_control());
-            ESP_LOGD(TAG, "[%s] temperature_min: %2.1f°C", name, s_data->temperature_min);
-            ESP_LOGD(TAG, "[%s] temperature_max: %2.1f°C", name, s_data->temperature_max);
-            ESP_LOGD(TAG, "[%s] frost_protection_temperature: %2.1f°C", name, s_data->frost_protection_temperature);
-            ESP_LOGD(TAG, "[%s] schedule_mode: %d", name, s_data->device_mode);
-            ESP_LOGD(TAG, "[%s] vacation_temperature: %2.1f°C", name, s_data->vacation_temperature);
-            ESP_LOGD(TAG, "[%s] vacation_from: %d", name, (int)s_data->vacation_from);
-            ESP_LOGD(TAG, "[%s] vacation_to: %d", name, (int)s_data->vacation_to);
+            ESP_LOGV(TAG, "[%s] SETTINGS DECRYPTED: %s", name, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+            ESP_LOGD(TAG, "[%s] SETTINGS PROCESSED: mode=%s(%u) min=%.1f max=%.1f frost=%.1f", name, SettingsData::mode_str(s_data->raw_mode), (unsigned)s_data->raw_mode, s_data->temperature_min, s_data->temperature_max, s_data->frost_protection_temperature);
+            ESP_LOGV(TAG, "[%s] adaptable_regulation=%d daylight_saving=%d vertical_installation=%d display_flip=%d slow_regulation=%d calibrated=%d valve_installed=%d lock_control=%d", name, s_data->get_adaptable_regulation(), s_data->get_daylight_saving(), s_data->get_vertical_installation(), s_data->get_display_flip(), s_data->get_slow_regulation(), s_data->get_calibrated(), s_data->get_valve_installed(), s_data->get_lock_control());
+            ESP_LOGV(TAG, "[%s] vacation: temperature=%.1f from=%d to=%d", name, s_data->vacation_temperature, (int)s_data->vacation_from, (int)s_data->vacation_to);
 
-            // apply read configuration to the component
-            this->component_->mode = s_data->device_mode;
+            auto *c = this->component_.get();
+            if (c->device_mode() != nullptr)
+                c->device_mode()->publish_state(SettingsData::mode_name(s_data->raw_mode));
+            publish_sensor(c->temperature_min(), s_data->temperature_min);
+            publish_sensor(c->temperature_max(), s_data->temperature_max);
+            publish_sensor(c->frost_protection_temperature(), s_data->frost_protection_temperature);
+            publish_sensor(c->vacation_temperature(), s_data->vacation_temperature);
+            // no vacation planned: unknown rather than 1970
+            publish_sensor(c->vacation_start(), s_data->vacation_from > 0 ? (float)s_data->vacation_from : NAN);
+            publish_sensor(c->vacation_end(), s_data->vacation_to > 0 ? (float)s_data->vacation_to : NAN);
+            publish_binary(c->child_lock(), s_data->get_lock_control());
+            publish_binary(c->valve_installed(), s_data->get_valve_installed());
+            publish_binary(c->daylight_saving(), s_data->get_daylight_saving());
+            publish_binary(c->adaptive_learning(), s_data->get_adaptable_regulation());
+            publish_binary(c->slow_regulation(), s_data->get_slow_regulation());
+            publish_binary(c->vertical_installation(), s_data->get_vertical_installation());
+            publish_binary(c->display_flip(), s_data->get_display_flip());
+
+            c->mode = s_data->device_mode;
             // Update the visual gauge range from the device-reported min/max (see my_component.h).
-            this->component_->set_temperature_range(s_data->temperature_min, s_data->temperature_max);
-            this->component_->publish_state();
+            c->set_temperature_range(s_data->temperature_min, s_data->temperature_max);
+            c->publish_climate_state();
+            return true;
         }
 
-        void ErrorsProperty::update_state(uint8_t *value, uint16_t value_len)
+        bool ErrorsProperty::update_state(uint8_t *value, uint16_t value_len)
         {
+            const char *name = this->component_->get_name().c_str();
             auto e_data = new ErrorsData(this->xxtea_, value, value_len);
+            if (!e_data->valid)
+            {
+                ESP_LOGE(TAG, "[%s] errors: could not decrypt", name);
+                delete e_data;
+                return false;
+            }
             this->data.reset(e_data);
 
+            ESP_LOGV(TAG, "[%s] ERRORS DECRYPTED: %s", name, format_hex_pretty(e_data->raw_, e_data->length).c_str());
+            ESP_LOGD(TAG, "[%s] errors: flags=%#06x E9 valve=%d E10 time=%d E14 low battery=%d E15 very low battery=%d", name, e_data->flags, e_data->E9_VALVE_DOES_NOT_CLOSE, e_data->E10_INVALID_TIME, e_data->E14_LOW_BATTERY, e_data->E15_VERY_LOW_BATTERY);
+            // published by the Device once the whole state (including the clock) has been read
+            return true;
+        }
+
+        bool TimeProperty::update_state(uint8_t *value, uint16_t value_len)
+        {
             const char *name = this->component_->get_name().c_str();
-
-            ESP_LOGD(TAG, "[%s] E9_VALVE_DOES_NOT_CLOSE: %d", name, e_data->E9_VALVE_DOES_NOT_CLOSE);
-            ESP_LOGD(TAG, "[%s] E10_INVALID_TIME: %d", name, e_data->E10_INVALID_TIME);
-            ESP_LOGD(TAG, "[%s] E14_LOW_BATTERY: %d", name, e_data->E14_LOW_BATTERY);
-            ESP_LOGD(TAG, "[%s] E15_VERY_LOW_BATTERY: %d", name, e_data->E15_VERY_LOW_BATTERY);
-
-            // TODO: it would be great to add actual error code to binary_sensor state attributes, but I'm not sure how to achieve that
-            if (this->component_->problems() != nullptr)
-                this->component_->problems()->publish_state(e_data->E9_VALVE_DOES_NOT_CLOSE || e_data->E10_INVALID_TIME || e_data->E14_LOW_BATTERY || e_data->E15_VERY_LOW_BATTERY);
-
-            // Human-readable problem list for the optional `problems_detail` text sensor.
-            string problems = "";
-
-            if (e_data->E9_VALVE_DOES_NOT_CLOSE)
-                problems += "Valve Stuck";
-
-            if (e_data->E10_INVALID_TIME)
+            auto t_data = new TimeData(this->xxtea_, value, value_len);
+            if (!t_data->valid)
             {
-                if (problems.size() > 0)
-                    problems += " | ";
-                problems += "Invalid Time";
+                ESP_LOGW(TAG, "[%s] time: implausible (decrypted %s)", name, format_hex_pretty(t_data->raw_, t_data->length).c_str());
+                delete t_data;
+                return false;
             }
-
-            if (e_data->E14_LOW_BATTERY)
-            {
-                if (problems.size() > 0)
-                    problems += " | ";
-                problems += "Low Battery";
-            }
-
-            if (e_data->E15_VERY_LOW_BATTERY)
-            {
-                if (problems.size() > 0)
-                    problems += " | ";
-                problems += "Very Low Battery";
-            }
-
-            if (this->component_->problems_detail() != nullptr)
-                this->component_->problems_detail()->publish_state(problems);
+            this->data.reset(t_data);
+            ESP_LOGD(TAG, "[%s] device clock: utc=%d offset=%d s", name, (int)t_data->epoch, (int)t_data->utc_offset);
+            return true;
         }
 
         bool SecretKeyProperty::init_handle(BLEClient *client)
         {
             if (this->xxtea_->status() != XXTEA_STATUS_NOT_INITIALIZED)
             {
-                ESP_LOGD(TAG, "[%s] xxtea is initialized, will not request a read of secret_key", this->component_->get_name().c_str());
+                ESP_LOGV(TAG, "[%s] xxtea is initialized, will not request a read of secret_key", this->component_->get_name().c_str());
+                this->handle = INVALID_HANDLE; // never leave a stale handle that a read response could match
                 return true;
             }
 
@@ -195,12 +223,12 @@ namespace esphome
             return false;
         }
 
-        void SecretKeyProperty::update_state(uint8_t *value, uint16_t value_len)
+        bool SecretKeyProperty::update_state(uint8_t *value, uint16_t value_len)
         {
             if (value_len != SECRET_KEY_LENGTH)
             {
                 ESP_LOGE(TAG, "[%s] Unexpected secret_key length: %d", this->component_->get_name().c_str(), value_len);
-                return;
+                return false;
             }
 
             char key_str[SECRET_KEY_LENGTH * 2 + 1];
@@ -209,6 +237,69 @@ namespace esphome
             ESP_LOGI(TAG, "[%s] Consider adding below line to your danfoss_eco config:", this->component_->get_name().c_str());
             ESP_LOGI(TAG, "[%s] secret_key: %s", this->component_->get_name().c_str(), key_str);
             this->component_->set_secret_key(value, true);
+            return true;
+        }
+
+        bool InfoProperty::update_state(uint8_t *value, uint16_t value_len)
+        {
+            // plain UTF-8 text, possibly NUL padded
+            string text;
+            for (uint16_t i = 0; i < value_len && value[i] != 0; i++)
+                text.push_back((value[i] < 0x20 || value[i] == 0x7F) ? ' ' : (char)value[i]);
+            const size_t first = text.find_first_not_of(' ');
+            const size_t last = text.find_last_not_of(' ');
+            this->value_ = first == string::npos ? string() : text.substr(first, last - first + 1);
+            ESP_LOGD(TAG, "[%s] %s: %s", this->component_->get_name().c_str(), this->label_, this->value_.c_str());
+            auto *s = this->component_->info_sensor(this->field_);
+            if (s != nullptr)
+                s->publish_state(this->value_);
+            return true;
+        }
+
+        bool NameProperty::update_state(uint8_t *value, uint16_t value_len)
+        {
+            auto n_data = new NameData(this->xxtea_, value, value_len);
+            if (!n_data->valid)
+            {
+                ESP_LOGW(TAG, "[%s] device name: could not decrypt (%u bytes)", this->component_->get_name().c_str(), (unsigned)value_len);
+                delete n_data;
+                return false;
+            }
+            ESP_LOGD(TAG, "[%s] device name: '%s'", this->component_->get_name().c_str(), n_data->name.c_str());
+            if (this->component_->thermostat_name() != nullptr)
+                this->component_->thermostat_name()->publish_state(n_data->name);
+            this->data.reset(n_data);
+            return true;
+        }
+
+        bool PinSettingsProperty::update_state(uint8_t *value, uint16_t value_len)
+        {
+            // never log this payload: it carries the PIN
+            auto p_data = new PinSettingsData(this->xxtea_, value, value_len);
+            if (!p_data->valid)
+            {
+                ESP_LOGW(TAG, "[%s] PIN settings: could not decrypt", this->component_->get_name().c_str());
+                delete p_data;
+                return false;
+            }
+            ESP_LOGD(TAG, "[%s] PIN protection: %s", this->component_->get_name().c_str(), p_data->pin_enabled ? "on" : "off");
+            publish_binary(this->component_->pin_protection(), p_data->pin_enabled);
+            this->data.reset(p_data);
+            return true;
+        }
+
+        bool ScheduleProperty::update_state(uint8_t *value, uint16_t value_len)
+        {
+            auto s_data = new SchedulePartData(this->xxtea_, this->part_, value, value_len);
+            if (!s_data->valid)
+            {
+                ESP_LOGW(TAG, "[%s] schedule part %u: implausible (decrypted %s)", this->component_->get_name().c_str(), (unsigned)this->part_ + 1, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+                delete s_data;
+                return false;
+            }
+            ESP_LOGV(TAG, "[%s] SCHEDULE %u DECRYPTED: %s", this->component_->get_name().c_str(), (unsigned)this->part_ + 1, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+            this->data.reset(s_data);
+            return true;
         }
 
     } // namespace danfoss_eco

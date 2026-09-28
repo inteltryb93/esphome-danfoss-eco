@@ -1,23 +1,39 @@
+# Minimal: one eTRV, no Home Assistant (e.g. for testing the Bluetooth link from the logs).
+# Credentials come from secrets.yaml (see secrets.example.yaml).
 esphome:
   name: etrv2wifi
   comment: Extend Danfoss ECO eTRV BLE range over WiFi with ESPHome
+  min_version: 2026.9.0
 
 esp32:
   board: esp32dev
   framework:
     type: esp-idf
 
+logger:
+
 wifi:
-  ssid: "my-ssid"
-  password: "my-password"
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
 
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/tryb103/danfoss_eco_merge
+    components: [danfoss_eco]
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false  # passive scanning spares the eTRV battery
+
+# keeps the eTRV clock set (AUTO / schedule mode) and clears E10 after a battery change
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Warsaw
 
 ble_client:
-  - mac_address: 00:04:2f:xx:xx:xx
+  - mac_address: 00:04:2F:AA:BB:01  # your eTRV's MAC (Danfoss app or danfoss_eco_scanner)
     id: room_eco2
 
 climate:
@@ -26,6 +42,7 @@ climate:
     ble_client_id: room_eco2
     pin_code: "0000"
     secret_key: deadbeefcafebabedeadbeefcafebabe
+    time_id: sntp_time
     battery_level:
       name: "My Room eTRV Battery Level"
     temperature:

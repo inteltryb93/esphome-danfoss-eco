@@ -1,0 +1,493 @@
+# GENERATED from sterownik-grzejnika.yaml (local component source, VERBOSE logging) - edit the production file, not this one.
+# ----------------------------------------------------------------------------------------------
+# sterownik-grzejnika: ESP32-C3 controlling four Danfoss Eco eTRVs over Bluetooth LE.
+#
+# Requires ESPHome >= 2026.9.0. Credentials (WiFi, eTRV PIN codes and secret keys) live in
+# secrets.yaml, which is NOT in git - see secrets.example.yaml for the keys it must contain (in the
+# Home Assistant ESPHome add-on: /config/esphome/secrets.yaml).
+#
+# Entity names of the existing Home Assistant entities are unchanged (history is kept). Everything
+# the eTRVs report over Bluetooth is exposed; see components/danfoss_eco / README for the meaning of
+# every entity. Informational values (firmware, serial number, name, schedule, PIN protection) are
+# read once after boot, the schedule once a day - they never open a Bluetooth link of their own.
+# ----------------------------------------------------------------------------------------------
+substitutions:
+  display_name: "sterownik-grzejnika"
+
+esphome:
+  name: ${display_name}
+  min_version: 2026.9.0
+  project:
+    name: tryb103.danfoss_eco_merge
+    version: "2.0.0"
+  platformio_options:
+    board_build.mcu: esp32c3
+    board_build.variant: esp32c3
+    board_build.flash_mode: dio
+    board_build.flash_size: 4MB
+
+esp32:
+  variant: ESP32C3
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+external_components:
+  # Same as sterownik-grzejnika.yaml, but built from the component in this working tree.
+  - source:
+      type: local
+      path: components
+    components: [danfoss_eco]
+
+esp32_ble:
+  # ESP32-C3 Bluedroid host limit: CONFIG_BT_ACL_CONNECTIONS range is 1-9, and ESPHome sets
+  # ACL = max_connections + 1, so 8 is the maximum (ACL=9). The component connects to one eTRV at
+  # a time, but every ble_client needs its own slot.
+  max_connections: 8
+
+esp32_ble_tracker:
+  scan_parameters:
+    # Passive scanning: the eTRVs are never asked for scan responses (every scan response is an
+    # extra radio transmission on the thermostat's battery). Connections only need the MAC address.
+    active: false
+
+logger:
+  # Deep debugging: every BLE link step, raw and decrypted characteristic values.
+  level: VERBOSE
+  logs:
+    esp32_ble_tracker: DEBUG
+    esp32_ble: DEBUG
+    esp32_ble_client: DEBUG
+    ble_client: VERBOSE
+    danfoss_eco: VERBOSE
+    wifi: DEBUG
+    api: DEBUG
+    api.connection: DEBUG
+    scheduler: INFO
+    component: DEBUG
+    sensor: INFO
+    climate: INFO
+    text_sensor: INFO
+    binary_sensor: INFO
+    debug: INFO
+
+api:
+  # Recommended: encrypt the API (Home Assistant then asks for the key once when re-adding the
+  # device). Generate a key with: python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+  # encryption:
+  #   key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    # Recommended: protect OTA updates with a password.
+    # password: !secret ota_password
+
+# eTRV clock source: keeps the thermostat clocks set and clears their E10 "invalid clock" error
+# after a battery change (the weekly schedule / AUTO mode needs a valid clock).
+time:
+  - platform: homeassistant
+    id: ha_time
+
+debug:
+  update_interval: 60s
+
+text_sensor:
+  - platform: template
+    name: "Log Message"
+    id: log_message_sensor
+
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+
+binary_sensor:
+  - platform: template
+    name: "Restart Trigger"
+    id: my_boolean_entity
+    publish_initial_state: false
+
+button:
+  - platform: safe_mode
+    name: ${display_name} (Safe Mode)
+
+  - platform: restart
+    name: ${display_name} Restart
+    id: restart_switch
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # The ESP32-C3 shares one radio between WiFi and Bluetooth: scan only while WiFi is connected.
+  on_connect:
+    - esp32_ble_tracker.start_scan:
+        continuous: true
+  on_disconnect:
+    - esp32_ble_tracker.stop_scan:
+
+sensor:
+  # memory monitoring (a slowly shrinking value would indicate a leak)
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+
+  # Signal strength of the thermostat's advertisements (averaged, one value per 5 minutes)
+  - platform: ble_rssi
+    mac_address: !secret kuchnia_mac
+    id: "RSSI_kuchnia_thermostat"
+    name: "RSSI_kuchnia_thermostat"
+    accuracy_decimals: 1
+    filters:
+      - throttle_average: 5min
+
+  # Signal strength of the thermostat's advertisements (averaged, one value per 5 minutes)
+  - platform: ble_rssi
+    mac_address: !secret kanciapamamy_mac
+    id: "RSSI_kanciapamamy_thermostat"
+    name: "RSSI_kanciapamamy_thermostat"
+    accuracy_decimals: 1
+    filters:
+      - throttle_average: 5min
+
+  # Signal strength of the thermostat's advertisements (averaged, one value per 5 minutes)
+  - platform: ble_rssi
+    mac_address: !secret sypialnia_mac
+    id: "RSSI_sypialnia_thermostat"
+    name: "RSSI_sypialnia_thermostat"
+    accuracy_decimals: 1
+    filters:
+      - throttle_average: 5min
+
+  # Signal strength of the thermostat's advertisements (averaged, one value per 5 minutes)
+  - platform: ble_rssi
+    mac_address: !secret salon_mac
+    id: "RSSI_salon_thermostat"
+    name: "RSSI_salon_thermostat"
+    accuracy_decimals: 1
+    filters:
+      - throttle_average: 5min
+
+ble_client:
+  - mac_address: !secret kuchnia_mac
+    id: kuchnia_thermostat
+
+  - mac_address: !secret kanciapamamy_mac
+    id: kanciapamamy_thermostat
+
+  - mac_address: !secret sypialnia_mac
+    id: sypialnia_thermostat
+
+  - mac_address: !secret salon_mac
+    id: salon_thermostat
+
+climate:
+  - platform: danfoss_eco
+    name: "kuchnia_thermostat"
+    ble_client_id: kuchnia_thermostat
+    pin_code: !secret kuchnia_pin_code
+    secret_key: !secret kuchnia_secret_key
+    time_id: ha_time
+    # One short BLE link per poll; commands from Home Assistant are sent immediately anyway.
+    update_interval: 720min
+    battery_level:
+      name: "kuchnia thermostat bateria"
+    temperature:
+      name: "kuchnia thermostat temperatura"
+    problems:
+      name: "kuchnia_thermostat Problems"
+    connection:
+      name: "kuchnia_thermostat connection"
+    problems_detail:
+      name: "kuchnia_thermostat problems detail"
+    low_battery:
+      name: "kuchnia_thermostat low battery"
+    valve_error:
+      name: "kuchnia_thermostat valve error"
+    motor_error:
+      name: "kuchnia_thermostat motor error"
+    clock_error:
+      name: "kuchnia_thermostat clock error"
+    hardware_error:
+      name: "kuchnia_thermostat hardware error"
+    device_mode:
+      name: "kuchnia_thermostat mode"
+    temperature_min:
+      name: "kuchnia_thermostat min temperature"
+    temperature_max:
+      name: "kuchnia_thermostat max temperature"
+    frost_protection_temperature:
+      name: "kuchnia_thermostat frost protection temperature"
+    vacation_temperature:
+      name: "kuchnia_thermostat vacation temperature"
+    vacation_start:
+      name: "kuchnia_thermostat vacation start"
+    vacation_end:
+      name: "kuchnia_thermostat vacation end"
+    child_lock:
+      name: "kuchnia_thermostat child lock"
+    valve_installed:
+      name: "kuchnia_thermostat valve installed"
+    daylight_saving:
+      name: "kuchnia_thermostat automatic summer time"
+    adaptive_learning:
+      name: "kuchnia_thermostat forecast"
+    slow_regulation:
+      name: "kuchnia_thermostat slow regulation"
+    vertical_installation:
+      name: "kuchnia_thermostat vertical installation"
+    display_flip:
+      name: "kuchnia_thermostat display flipped"
+    pin_protection:
+      name: "kuchnia_thermostat PIN protection"
+    thermostat_name:
+      name: "kuchnia_thermostat name in app"
+    schedule:
+      name: "kuchnia_thermostat schedule"
+    schedule_home_temperature:
+      name: "kuchnia_thermostat schedule home temperature"
+    schedule_away_temperature:
+      name: "kuchnia_thermostat schedule away temperature"
+    manufacturer:
+      name: "kuchnia_thermostat manufacturer"
+    model:
+      name: "kuchnia_thermostat model"
+    hardware_version:
+      name: "kuchnia_thermostat hardware version"
+    firmware_version:
+      name: "kuchnia_thermostat firmware version"
+    software_version:
+      name: "kuchnia_thermostat software version"
+
+  - platform: danfoss_eco
+    name: "kanciapamamy_thermostat"
+    ble_client_id: kanciapamamy_thermostat
+    pin_code: !secret kanciapamamy_pin_code
+    secret_key: !secret kanciapamamy_secret_key
+    time_id: ha_time
+    # One short BLE link per poll; commands from Home Assistant are sent immediately anyway.
+    update_interval: 720min
+    battery_level:
+      name: "kanciapamamy bateria"
+    temperature:
+      name: "kanciapamamy_temperature"
+    problems:
+      name: "kanciapamamy_thermostat Problems"
+    connection:
+      name: "kanciapamamy_thermostat connection"
+    problems_detail:
+      name: "kanciapamamy_thermostat problems detail"
+    low_battery:
+      name: "kanciapamamy_thermostat low battery"
+    valve_error:
+      name: "kanciapamamy_thermostat valve error"
+    motor_error:
+      name: "kanciapamamy_thermostat motor error"
+    clock_error:
+      name: "kanciapamamy_thermostat clock error"
+    hardware_error:
+      name: "kanciapamamy_thermostat hardware error"
+    device_mode:
+      name: "kanciapamamy_thermostat mode"
+    temperature_min:
+      name: "kanciapamamy_thermostat min temperature"
+    temperature_max:
+      name: "kanciapamamy_thermostat max temperature"
+    frost_protection_temperature:
+      name: "kanciapamamy_thermostat frost protection temperature"
+    vacation_temperature:
+      name: "kanciapamamy_thermostat vacation temperature"
+    vacation_start:
+      name: "kanciapamamy_thermostat vacation start"
+    vacation_end:
+      name: "kanciapamamy_thermostat vacation end"
+    child_lock:
+      name: "kanciapamamy_thermostat child lock"
+    valve_installed:
+      name: "kanciapamamy_thermostat valve installed"
+    daylight_saving:
+      name: "kanciapamamy_thermostat automatic summer time"
+    adaptive_learning:
+      name: "kanciapamamy_thermostat forecast"
+    slow_regulation:
+      name: "kanciapamamy_thermostat slow regulation"
+    vertical_installation:
+      name: "kanciapamamy_thermostat vertical installation"
+    display_flip:
+      name: "kanciapamamy_thermostat display flipped"
+    pin_protection:
+      name: "kanciapamamy_thermostat PIN protection"
+    thermostat_name:
+      name: "kanciapamamy_thermostat name in app"
+    schedule:
+      name: "kanciapamamy_thermostat schedule"
+    schedule_home_temperature:
+      name: "kanciapamamy_thermostat schedule home temperature"
+    schedule_away_temperature:
+      name: "kanciapamamy_thermostat schedule away temperature"
+    manufacturer:
+      name: "kanciapamamy_thermostat manufacturer"
+    model:
+      name: "kanciapamamy_thermostat model"
+    hardware_version:
+      name: "kanciapamamy_thermostat hardware version"
+    firmware_version:
+      name: "kanciapamamy_thermostat firmware version"
+    software_version:
+      name: "kanciapamamy_thermostat software version"
+
+  - platform: danfoss_eco
+    name: "sypialnia_thermostat"
+    ble_client_id: sypialnia_thermostat
+    pin_code: !secret sypialnia_pin_code
+    secret_key: !secret sypialnia_secret_key
+    time_id: ha_time
+    # One short BLE link per poll; commands from Home Assistant are sent immediately anyway.
+    update_interval: 720min
+    battery_level:
+      name: "sypialnia_thermostat bateria"
+    temperature:
+      name: "sypialnia_thermostat temperatura"
+    problems:
+      name: "sypialnia_thermostat Problems"
+    connection:
+      name: "sypialnia_thermostat connection"
+    problems_detail:
+      name: "sypialnia_thermostat problems detail"
+    low_battery:
+      name: "sypialnia_thermostat low battery"
+    valve_error:
+      name: "sypialnia_thermostat valve error"
+    motor_error:
+      name: "sypialnia_thermostat motor error"
+    clock_error:
+      name: "sypialnia_thermostat clock error"
+    hardware_error:
+      name: "sypialnia_thermostat hardware error"
+    device_mode:
+      name: "sypialnia_thermostat mode"
+    temperature_min:
+      name: "sypialnia_thermostat min temperature"
+    temperature_max:
+      name: "sypialnia_thermostat max temperature"
+    frost_protection_temperature:
+      name: "sypialnia_thermostat frost protection temperature"
+    vacation_temperature:
+      name: "sypialnia_thermostat vacation temperature"
+    vacation_start:
+      name: "sypialnia_thermostat vacation start"
+    vacation_end:
+      name: "sypialnia_thermostat vacation end"
+    child_lock:
+      name: "sypialnia_thermostat child lock"
+    valve_installed:
+      name: "sypialnia_thermostat valve installed"
+    daylight_saving:
+      name: "sypialnia_thermostat automatic summer time"
+    adaptive_learning:
+      name: "sypialnia_thermostat forecast"
+    slow_regulation:
+      name: "sypialnia_thermostat slow regulation"
+    vertical_installation:
+      name: "sypialnia_thermostat vertical installation"
+    display_flip:
+      name: "sypialnia_thermostat display flipped"
+    pin_protection:
+      name: "sypialnia_thermostat PIN protection"
+    thermostat_name:
+      name: "sypialnia_thermostat name in app"
+    schedule:
+      name: "sypialnia_thermostat schedule"
+    schedule_home_temperature:
+      name: "sypialnia_thermostat schedule home temperature"
+    schedule_away_temperature:
+      name: "sypialnia_thermostat schedule away temperature"
+    manufacturer:
+      name: "sypialnia_thermostat manufacturer"
+    model:
+      name: "sypialnia_thermostat model"
+    hardware_version:
+      name: "sypialnia_thermostat hardware version"
+    firmware_version:
+      name: "sypialnia_thermostat firmware version"
+    software_version:
+      name: "sypialnia_thermostat software version"
+
+  - platform: danfoss_eco
+    name: "salon_thermostat"
+    ble_client_id: salon_thermostat
+    pin_code: !secret salon_pin_code
+    secret_key: !secret salon_secret_key
+    time_id: ha_time
+    # One short BLE link per poll; commands from Home Assistant are sent immediately anyway.
+    update_interval: 720min
+    battery_level:
+      name: "salon_thermostat bateria"
+    temperature:
+      name: "salon_thermostat temperatura"
+    problems:
+      name: "salon_thermostat Problems"
+    connection:
+      name: "salon_thermostat connection"
+    problems_detail:
+      name: "salon_thermostat problems detail"
+    low_battery:
+      name: "salon_thermostat low battery"
+    valve_error:
+      name: "salon_thermostat valve error"
+    motor_error:
+      name: "salon_thermostat motor error"
+    clock_error:
+      name: "salon_thermostat clock error"
+    hardware_error:
+      name: "salon_thermostat hardware error"
+    device_mode:
+      name: "salon_thermostat mode"
+    temperature_min:
+      name: "salon_thermostat min temperature"
+    temperature_max:
+      name: "salon_thermostat max temperature"
+    frost_protection_temperature:
+      name: "salon_thermostat frost protection temperature"
+    vacation_temperature:
+      name: "salon_thermostat vacation temperature"
+    vacation_start:
+      name: "salon_thermostat vacation start"
+    vacation_end:
+      name: "salon_thermostat vacation end"
+    child_lock:
+      name: "salon_thermostat child lock"
+    valve_installed:
+      name: "salon_thermostat valve installed"
+    daylight_saving:
+      name: "salon_thermostat automatic summer time"
+    adaptive_learning:
+      name: "salon_thermostat forecast"
+    slow_regulation:
+      name: "salon_thermostat slow regulation"
+    vertical_installation:
+      name: "salon_thermostat vertical installation"
+    display_flip:
+      name: "salon_thermostat display flipped"
+    pin_protection:
+      name: "salon_thermostat PIN protection"
+    thermostat_name:
+      name: "salon_thermostat name in app"
+    schedule:
+      name: "salon_thermostat schedule"
+    schedule_home_temperature:
+      name: "salon_thermostat schedule home temperature"
+    schedule_away_temperature:
+      name: "salon_thermostat schedule away temperature"
+    manufacturer:
+      name: "salon_thermostat manufacturer"
+    model:
+      name: "salon_thermostat model"
+    hardware_version:
+      name: "salon_thermostat hardware version"
+    firmware_version:
+      name: "salon_thermostat firmware version"
+    software_version:
+      name: "salon_thermostat software version"

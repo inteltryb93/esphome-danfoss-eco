@@ -45,3 +45,5 @@ climate:
       name: "Test eTRV Problems"
     problems_detail:
       name: "Test eTRV Problems Detail"
+    connection:
+      name: "Test eTRV Connection"

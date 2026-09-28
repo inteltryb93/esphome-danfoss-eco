@@ -1,35 +1,53 @@
+# One eTRV in Home Assistant with the recommended options and a selection of the optional entities
+# (see README for all of them). Credentials come from secrets.yaml (see secrets.example.yaml).
 esphome:
   name: etrv2wifi
   comment: Extend Danfoss ECO eTRV BLE range over WiFi with ESPHome
+  min_version: 2026.9.0
 
 esp32:
   board: esp32dev
   framework:
     type: esp-idf
 
-# Enable Home Assistant API
+logger:
+
+# Home Assistant API, encrypted (the 'password' option was removed in ESPHome 2026.1.0). Without a
+# key the device is provisioned by Home Assistant on the first connection; a fixed key can be given
+# with `key: !secret api_encryption_key`.
 api:
-  password: "generate-api-password"
+  encryption: {}
 
 ota:
   - platform: esphome
-    password: "generate-ota-password"
+    password: !secret ota_password
 
 wifi:
-  ssid: "my-ssid"
-  password: "my-password"
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: "My Room eTRV Fallback Hotspot"
-    password: "my-fallback-ap-password"
+    password: !secret fallback_ap_password
 
 captive_portal:
 
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/tryb103/danfoss_eco_merge
+      ref: main  # pin a tag or commit for production
+    components: [danfoss_eco]
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false  # passive scanning spares the eTRV battery
+
+# keeps the eTRV clock set (AUTO / schedule mode) and clears E10 after a battery change
+time:
+  - platform: homeassistant
+    id: ha_time
 
 sensor:
   - platform: wifi_signal
@@ -37,7 +55,7 @@ sensor:
     update_interval: 60s
 
 ble_client:
-  - mac_address: 00:04:2f:xx:xx:xx
+  - mac_address: 00:04:2F:AA:BB:01  # your eTRV's MAC (Danfoss app or danfoss_eco_scanner)
     id: room_eco2
 
 climate:
@@ -46,6 +64,8 @@ climate:
     ble_client_id: room_eco2
     pin_code: "0000"
     secret_key: deadbeefcafebabedeadbeefcafebabe
+    time_id: ha_time
+    update_interval: 30min
     battery_level:
       name: "My Room eTRV Battery Level"
     temperature:
@@ -54,4 +74,17 @@ climate:
       name: "My Room eTRV Problems"
     problems_detail:
       name: "My Room eTRV Problems Detail"
-    update_interval: 30min
+    connection:
+      name: "My Room eTRV Connection"
+    low_battery:
+      name: "My Room eTRV Low Battery"
+    clock_error:
+      name: "My Room eTRV Clock Error"
+    device_mode:
+      name: "My Room eTRV Mode"
+    child_lock:
+      name: "My Room eTRV Child Lock"
+    schedule:
+      name: "My Room eTRV Schedule"
+    firmware_version:
+      name: "My Room eTRV Firmware"

@@ -31,11 +31,21 @@ namespace esphome
             return {};
         }
 
-        void parse_hex_str(const char *data, size_t str_len, uint8_t *buff)
+        bool parse_hex_str(const char *data, size_t str_len, uint8_t *buff)
         {
+            // Never call optional::value() on an invalid character: with -fno-exceptions that aborts
+            // the firmware at boot (boot loop). climate.py validates the string, this is defence in depth.
             size_t len = str_len / 2;
+            bool ok = true;
             for (size_t i = 0; i < len; i++)
-                buff[i] = (parse_hex(data[i * 2]).value() << 4) | parse_hex(data[i * 2 + 1]).value();
+            {
+                auto hi = parse_hex(data[i * 2]);
+                auto lo = parse_hex(data[i * 2 + 1]);
+                if (!hi.has_value() || !lo.has_value())
+                    ok = false;
+                buff[i] = (hi.value_or(0) << 4) | lo.value_or(0);
+            }
+            return ok;
         }
 
         uint32_t parse_int(uint8_t *data, int start_pos)
@@ -60,11 +70,6 @@ namespace esphome
 
         bool parse_bit(uint16_t data, int pos) { return (data & (1 << pos)) >> pos; }
 
-        void set_bit(uint8_t data, int pos, bool value)
-        {
-            data ^= (-value ^ data) & (1UL << pos);
-        }
-
         void reverse_chunks(uint8_t *data, int len, uint8_t *reversed_buff)
         {
             for (int i = 0; i < len; i += 4)
@@ -77,38 +82,57 @@ namespace esphome
             }
         }
 
-        uint8_t *encrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
+        // XXTEA as used by the eTRV: every 4-byte chunk is byte-reversed before and after the cipher.
+        // Both functions work in place and return false (leaving `value` untouched) on any failure, so a
+        // failed cipher can never be mistaken for plaintext (decrypt) or sent as plaintext (encrypt).
+        static constexpr uint16_t MAX_CIPHER_LEN = 20;
+        static bool cipher_len_ok(uint16_t value_len)
         {
-            uint8_t buffer[value_len], enc_buff[value_len];
-            reverse_chunks(value, value_len, buffer);
-
-            // IMPORTANT (bug fix): Xxtea::encrypt() takes `size_t *maxlen` (4 bytes on ESP32) and
-            // writes `*maxlen = l * 4;` back through it. The original code passed
-            // `(size_t *)&value_len`, but value_len is a 2-byte uint16_t. Writing 4 bytes through a
-            // pointer to a 2-byte object corrupts 2 adjacent stack bytes (undefined behaviour).
-            // Use a properly sized size_t local instead. (decrypt() is fine: it takes size_t by value.)
-            size_t out_len = value_len;
-            ESP_LOGV(TAG, "encrypt: in_len=%u", (unsigned)value_len);
-            auto xxtea_status = xxtea->encrypt(buffer, value_len, enc_buff, &out_len);
-            if (xxtea_status != XXTEA_STATUS_SUCCESS)
-                ESP_LOGW(TAG, "xxtea_encrypt failed, len=%u status=%d", (unsigned)value_len, xxtea_status);
-            else
-                reverse_chunks(enc_buff, out_len, value);
-            return value;
+            // eTRV characteristics are 8, 12 (schedule 2/3), 16 or 20 (schedule 1) bytes; XXTEA needs
+            // >= 2 32-bit words.
+            return value_len >= 8 && value_len <= MAX_CIPHER_LEN && (value_len % 4) == 0;
         }
 
-        uint8_t *decrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
+        bool encrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
         {
-            uint8_t buffer[value_len];
+            if (!cipher_len_ok(value_len))
+            {
+                ESP_LOGE(TAG, "encrypt: refusing length %u", (unsigned)value_len);
+                return false;
+            }
+            uint8_t buffer[MAX_CIPHER_LEN], enc_buff[MAX_CIPHER_LEN];
             reverse_chunks(value, value_len, buffer);
 
-            ESP_LOGV(TAG, "decrypt: in_len=%u", (unsigned)value_len);
+            // Xxtea::encrypt() takes `size_t *maxlen` and writes `*maxlen = l * 4` back through it, so it
+            // must point at a real size_t (the original code passed a uint16_t -> stack corruption).
+            size_t out_len = value_len;
+            auto xxtea_status = xxtea->encrypt(buffer, value_len, enc_buff, &out_len);
+            if (xxtea_status != XXTEA_STATUS_SUCCESS || out_len != value_len)
+            {
+                ESP_LOGE(TAG, "xxtea_encrypt failed, len=%u out_len=%u status=%d", (unsigned)value_len, (unsigned)out_len, xxtea_status);
+                return false;
+            }
+            reverse_chunks(enc_buff, value_len, value);
+            return true;
+        }
+
+        bool decrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len)
+        {
+            if (!cipher_len_ok(value_len))
+            {
+                ESP_LOGW(TAG, "decrypt: unexpected length %u", (unsigned)value_len);
+                return false;
+            }
+            uint8_t buffer[MAX_CIPHER_LEN];
+            reverse_chunks(value, value_len, buffer);
             auto xxtea_status = xxtea->decrypt(buffer, value_len);
             if (xxtea_status != XXTEA_STATUS_SUCCESS)
+            {
                 ESP_LOGW(TAG, "xxtea_decrypt failed, len=%u status=%d", (unsigned)value_len, xxtea_status);
-            else
-                reverse_chunks(buffer, value_len, value);
-            return value;
+                return false;
+            }
+            reverse_chunks(buffer, value_len, value);
+            return true;
         }
 
         void copy_address(uint64_t mac, esp_bd_addr_t bd_addr)
