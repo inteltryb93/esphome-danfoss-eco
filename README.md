@@ -160,6 +160,13 @@ Configuration options
 - **retry_window** (*Optional*, time, default `10min`, range 30 s–60 min): length of the fast retry
   phase (back-off 3 s, 15 s, 30 s, 60 s, 120 s). If the eTRV is still not reachable, the request is
   **kept** and retried every 5 minutes (every 15 minutes after one more hour) for up to 24 hours.
+- **cache_services** (*Optional*, boolean, default `true`): keep the eTRV's GATT service table in
+  flash (Bluedroid's NVS service cache, the same setting `bluetooth_proxy` uses). Without it ESPHome
+  clears the table after every disconnect and the Bluetooth stack rediscovers all services at the start
+  of every link, before the first request goes out. Measured on the four eTRVs: time from link open to
+  the first answer 2.1 s → 0.19 s (median), 7.9 s → 0.21 s (p90); whole link 2.6 s → 0.7 s (median),
+  10.7 s → 1.0 s (p90). The table is rebuilt from the eTRV whenever its layout looks different
+  (unexpected length or ATT error) and before onboarding.
 - **visual** (*Optional*): Standard ESPHome climate `visual:` block (min/max temperature, step).
   The component also auto-updates the displayed range from the eTRV's reported settings.
 
@@ -281,10 +288,13 @@ guarantees that no link is ever left open:
    WiFi/BT coexistence preference to Bluetooth and serialises connection attempts. A direct
    `connect()` is only used as a fallback if the tracker does not promote the request within 15 s.
 3. On the link: PIN → **read the device state** → pending writes, packed from the state read *in
-   this link* → re-read → **disconnect and disable the `ble_client`**. A typical link lasts ~2.5 s.
-   GATT service discovery (7–11 s) is only done on the first link after boot; later links reuse the
-   handles (ESPHome `V3_WITH_CACHE` client mode). Anything unexpected at those handles (ATT error,
-   wrong value length, rejected PIN) makes the next link discover again.
+   this link* → re-read → **disconnect and disable the `ble_client`**. A typical link lasts ~0.7 s.
+   The component resolves the handles by service discovery on the first link after boot and reuses
+   them afterwards (ESPHome `V3_WITH_CACHE` client mode); with `cache_services` the Bluetooth stack
+   keeps the service table in flash, so it does not rediscover it on every link either (without the
+   cache every link started with a ~2 s, at a weak signal >10 s, discovery by the stack). Anything
+   unexpected at those handles (ATT error, wrong value length, rejected PIN) makes the next link
+   discover again, from the eTRV itself.
 4. If a link is lost half-way, the pending operations survive and are retried (see `retry_window`).
    A failed *open* (status 0x85, eTRV not heard for 20 s) leaves the client enabled once, so the
    tracker's `auto_connect` can connect the moment the eTRV is heard advertising; after the second

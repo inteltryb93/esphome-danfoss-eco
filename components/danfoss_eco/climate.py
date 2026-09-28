@@ -39,6 +39,7 @@ CONF_PROBLEMS_DETAIL = 'problems_detail'
 CONF_REQUEST_TIMEOUT = 'request_timeout'
 CONF_RETRY_WINDOW = 'retry_window'
 CONF_CONNECTION = 'connection'
+CONF_CACHE_SERVICES = 'cache_services'
 CONF_PROBLEMS_DETAIL_DEFAULT_ICON = 'mdi:format-list-checks'
 
 eco_ns = cg.esphome_ns.namespace("danfoss_eco")
@@ -196,6 +197,11 @@ CONFIG_SCHEMA = (
                 cv.positive_time_period_milliseconds,
                 cv.Range(min=cv.TimePeriod(seconds=30), max=cv.TimePeriod(minutes=60)),
             ),
+            # Keep the eTRV's GATT service table in flash (Bluedroid's NVS service cache, the same
+            # thing bluetooth_proxy's `cache_services` does). Without it ESPHome clears the table after
+            # every disconnect and the Bluetooth stack rediscovers all services on every link before
+            # the first request goes out (~2 s, >10 s at a weak signal - most of each link's time).
+            cv.Optional(CONF_CACHE_SERVICES, default=True): cv.boolean,
             **{cv.Optional(key): schema for key, (_, schema) in BINARY_SENSORS.items()},
             **{cv.Optional(key): schema for key, (_, schema) in SENSORS.items()},
             **{cv.Optional(key): schema for key, (_, schema) in TEXT_SENSORS.items()},
@@ -216,6 +222,10 @@ async def to_code(config):
     cg.add(var.set_pin_code(config.get(CONF_PIN_CODE, "")))
     cg.add(var.set_request_timeout(config[CONF_REQUEST_TIMEOUT].total_milliseconds))
     cg.add(var.set_retry_window(config[CONF_RETRY_WINDOW].total_milliseconds))
+    if config[CONF_CACHE_SERVICES]:
+        from esphome.components.esp32 import add_idf_sdkconfig_option
+
+        add_idf_sdkconfig_option("CONFIG_BT_GATTC_CACHE_NVS_FLASH", True)
 
     if CONF_BATTERY_LEVEL in config:
         sens = await sensor.new_sensor(config[CONF_BATTERY_LEVEL])

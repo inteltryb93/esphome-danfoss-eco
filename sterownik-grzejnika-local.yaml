@@ -114,6 +114,10 @@ sensor:
     block:
       name: "Heap Max Block"
 
+  # time since the last (re)start: an unexpected reboot shows as a drop
+  - platform: uptime
+    name: "Uptime"
+
   # Signal strength of the thermostat's advertisements (averaged, one value per 5 minutes)
   - platform: ble_rssi
     mac_address: !secret kuchnia_mac

@@ -197,6 +197,11 @@ namespace esphome
       ESP_LOGCONFIG(TAG, "  Fast retry phase: %u ms, then every %u / %u s", (unsigned)this->retry_window_ms_, (unsigned)(SLOW_RETRY_MS / 1000), (unsigned)(SLOW_RETRY_LONG_MS / 1000));
       ESP_LOGCONFIG(TAG, "  Link watchdog: %u ms", (unsigned)LINK_WATCHDOG_MS);
       ESP_LOGCONFIG(TAG, "  Clock sync: %s", this->time_sync_enabled_() ? "enabled" : "disabled (no time_id)");
+#ifdef CONFIG_BT_GATTC_CACHE_NVS_FLASH
+      ESP_LOGCONFIG(TAG, "  GATT service cache: persistent (no rediscovery per link)");
+#else
+      ESP_LOGCONFIG(TAG, "  GATT service cache: off (the stack rediscovers services on every link)");
+#endif
       LOG_SENSOR("", "Battery Level", this->battery_level_);
       LOG_SENSOR("", "Room Temperature", this->temperature_);
       LOG_BINARY_SENSOR("", "Problems", this->problems_);
@@ -639,6 +644,16 @@ namespace esphome
       // right at OPEN and no discovery is issued. The secret key characteristic only exists during
       // the eTRV's pairing window, so onboarding always discovers.
       const bool discover = !this->handles_verified_ || this->xxtea->status() != XXTEA_STATUS_SUCCESS;
+      // With the persistent service cache (cache_services) a discovery may be answered from the
+      // cache. That is what we want after a reboot, but not when the layout looked wrong, nor for
+      // onboarding (the secret key characteristic only exists while the pairing window is open):
+      // then the stack's table for this eTRV is cleared first (no link is open at this point).
+      if (discover && (this->gatt_cache_clean_pending_ || this->xxtea->status() != XXTEA_STATUS_SUCCESS))
+      {
+        ESP_LOGD(TAG, "[%s] clearing the stack's cached service table before discovery", this->get_name().c_str());
+        esp_ble_gattc_cache_clean(this->parent()->get_remote_bda());
+        this->gatt_cache_clean_pending_ = false;
+      }
       this->parent()->set_connection_type(discover ? ConnectionType::V1 : ConnectionType::V3_WITH_CACHE);
 
       if (this->connect_attempts_ < 255)
@@ -1266,6 +1281,8 @@ namespace esphome
       if (this->handles_verified_)
         ESP_LOGW(TAG, "[%s] %s - forgetting GATT handles, next link will rediscover services", this->get_name().c_str(), why);
       this->handles_verified_ = false;
+      // ... from the eTRV itself, not from the stack's cached service table
+      this->gatt_cache_clean_pending_ = true;
     }
 
     void Device::write_pin()

@@ -218,6 +218,8 @@ namespace esphome
       // GATT handles: resolved by service discovery on the first link after boot, then reused on
       // every following link without discovery (ESPHome V3_WITH_CACHE client mode).
       bool handles_verified_{false};
+      // The stack's (persistent) service table must be rebuilt before the next discovery.
+      bool gatt_cache_clean_pending_{false};
 
       // current link state
       uint8_t batch_{0};                 // which operation batch the in-flight requests belong to
