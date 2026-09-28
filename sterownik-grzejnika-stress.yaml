@@ -3,11 +3,6 @@ substitutions:
 
 esphome:
   name: ${display_name}
-  platformio_options:
-    board_build.mcu: esp32c3
-    board_build.variant: esp32c3
-    board_build.flash_mode: dio
-    board_build.flash_size: 4MB
 
 esp32:
   variant: ESP32C3
@@ -76,7 +71,7 @@ binary_sensor:
   - platform: template
     name: "Restart Trigger"
     id: my_boolean_entity
-    publish_initial_state: false
+    trigger_on_initial_state: false
 
 button:
   - platform: safe_mode

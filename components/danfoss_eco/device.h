@@ -231,7 +231,8 @@ namespace esphome
       uint32_t link_started_ms_{0};
       uint8_t inflight_{0};              // GATT requests sent and not yet answered on this link
       uint32_t last_activity_ms_{0};     // last request sent / response received
-      uint32_t parent_busy_since_ms_{0}; // client-state watchdog
+      uint32_t parent_busy_since_ms_{0}; // client-state watchdog: when the client became busy
+      bool parent_busy_{false};          // ... and whether that timer is armed
       ClientState last_parent_state_{ClientState::INIT};
       bool pin_inflight_{false};
       esp_gatt_status_t last_open_status_{ESP_GATT_OK};

@@ -325,17 +325,21 @@ namespace esphome
 
       // --- safety net: ESPHome client stuck outside IDLE without a link of ours ---
       const bool client_busy = !this->link_up_ && (pst == ClientState::CONNECTING || pst == ClientState::CONNECTED || pst == ClientState::ESTABLISHED || pst == ClientState::DISCONNECTING);
+      // (A separate "armed" flag: the start time must never lie after a later `now` - with the
+      // old `now | 1` sentinel two loop passes within the same millisecond made `now - start`
+      // underflow and fired the watchdog right after a normal connection attempt had started.)
       if (!client_busy)
       {
-        this->parent_busy_since_ms_ = 0;
+        this->parent_busy_ = false;
       }
-      else if (this->parent_busy_since_ms_ == 0)
+      else if (!this->parent_busy_)
       {
-        this->parent_busy_since_ms_ = now | 1;
+        this->parent_busy_ = true;
+        this->parent_busy_since_ms_ = now;
       }
       else if (now - this->parent_busy_since_ms_ > CLIENT_WATCHDOG_MS)
       {
-        this->parent_busy_since_ms_ = 0;
+        this->parent_busy_ = false;
         this->log_link_("CLIENT WATCHDOG: BLE client stuck without a link, resetting it", ESPHOME_LOG_LEVEL_ERROR);
         // ESP_GATT_ALREADY_OPEN is accepted by ESPHome as an open without a CONNECT_EVT, so ESPHome
         // has no conn_id to close: close it with the conn_id the OPEN_EVT carried.
