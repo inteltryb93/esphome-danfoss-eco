@@ -368,3 +368,21 @@ ESPHome's BLE client logs every open that is not answered within `connection_tim
 `[E] ESP_GATTC_OPEN_EVT in DISCONNECTING state (status=133)` + `[W] Connection open error` (the
 stack reports the failed connection before the open result); documented in the README as expected
 at a weak signal.
+
+**A higher Bluetooth TX power does not help.** ESPHome leaves the BLE TX power of a client at the
+ESP-IDF default, +9 dBm on the ESP32-C3 (+20 dBm possible, `CONFIG_BT_CTRL_DFT_TX_POWER_LEVEL_P20`).
+A/B on the same night with a test firmware that switches the initiator and default TX power at
+runtime (`esp_ble_tx_power_set_enhanced`, template buttons), alternating every 8 minutes while every
+eTRV got a read-only link as soon as its last one was a minute old (`scenario_test.py --scenarios
+txab`):
+
+| connection attempts that connected | +9 dBm (default) | +20 dBm |
+|---|---|---|
+| all four eTRVs | 65 % of 158 | 57 % of 157 |
+| kanciapamamy / kuchnia | 70 % / 86 % | 67 % / 74 % |
+| salon / sypialnia (the weak ones) | 55 % / 49 % | 54 % / 36 % |
+
+(With an earlier, round-based run: 62 % of 191 vs 57 % of 179, not a significant difference.) What
+limits a connection is the ESP hearing the eTRV's sparse advertising, not the eTRV hearing the ESP;
+the production configuration keeps the default. No WiFi disconnect and no API connection loss in
+these 1.9 h either (WiFi -56...-64 dBm); the one request timeout described above was the only anomaly.
