@@ -296,10 +296,19 @@ guarantees that no link is ever left open:
    unexpected at those handles (ATT error, wrong value length, rejected PIN) makes the next link
    discover again, from the eTRV itself.
 4. If a link is lost half-way, the pending operations survive and are retried (see `retry_window`).
-   A failed *open* (status 0x85, eTRV not heard for 20 s) leaves the client enabled once, so the
-   tracker's `auto_connect` can connect the moment the eTRV is heard advertising; after the second
-   failed open the client is parked between the backed-off attempts, because every 20 s open attempt
-   delays the other thermostats (the tracker connects one client at a time).
+   A failed *open* (status 0x85, eTRV not heard for 20 s) costs the eTRV nothing, and waiting longer
+   does not make the next attempt more likely to connect (measured: ~64 % of the attempts connect,
+   whatever came before), so it is retried after 3 s, up to 6 times in a row. Meanwhile the client
+   stays enabled, so the tracker's `auto_connect` can also connect the moment the eTRV is heard
+   advertising, and a thermostat that has just failed lets the others that are waiting go first
+   (the tracker connects one client at a time, round robin). An eTRV that fails more often than
+   that is most likely out of reach: it is parked between backed-off attempts (15 s ... 2 min, then
+   the slow phase).
+   ESPHome's BLE client logs every such attempt as
+   `[E][esp32_ble_client] ESP_GATTC_OPEN_EVT in DISCONNECTING state (status=133)` followed by
+   `[W] Connection open error, status=133` (the stack reports the failed connection before the open
+   result). At a weak signal these lines are expected and harmless; the component's own
+   `failed to open ... retry in N s` line that follows says what happens next.
 5. Protocol errors that a retry cannot fix (rejected PIN, rejected request, data that does not
    decrypt to plausible values = wrong `secret_key`, missing characteristics) are counted; after 3 in
    a row the request is dropped until the next poll or command.
@@ -360,10 +369,19 @@ All tools need `aioesphomeapi`.
 - `tools/capture_logs.py` records the complete device log; `tools/analyze_log2.py` summarises it per
   thermostat (links, discovery, PIN, reads/writes, close reason, warnings).
 - `tools/press_restart.py` presses the restart button entity.
+- `tools/scenario_test.py` times complete operations on a VERBOSE build: all thermostats at once,
+  read-only links, back-to-back writes to one thermostat, A-B-A, a superseded command, mixed reads and
+  writes, the first command after a reboot. Every command is followed through the device log from the
+  API send to the value read back from the eTRV, with the phases in between; the report ends with the
+  radio statistics (connection attempts, success rate, radio idle time while work was pending).
+- `tools/soak_monitor.py` records heap, uptime, reconnects and the thermostat values as CSV over hours
+  (leaks, unexpected reboots).
 
 ```
 python tools/ble_exercise.py --host sterownik-grzejnika.local --prefix run --period 90 --delta 1.0 --double-tap 1.5 --restart-every 8
 python tools/analyze_log2.py run.log
+python tools/scenario_test.py --out scenarios.log --scenarios parallel,readonly,same,ab,double,mixed,cold --repeat 3
+python tools/soak_monitor.py --out soak.csv --interval 60
 ```
 
 See Also

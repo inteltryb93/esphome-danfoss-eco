@@ -278,3 +278,93 @@ component; DEBUG logs, passive scanning, all optional entities), ESPHome 2026.9.
 Compile checks (ESPHome 2026.9.0, 0 warnings): ESP32-C3 production config; plain ESP32 with every
 optional key and a time source; plain ESP32 without any time component (plus the scanner); the three
 example configurations validate.
+
+## Production deployment and link-time optimisation (2026-09-28, fourth pass)
+
+Deployed on the user's ESPHome Device Builder (ESPHome 2026.9.0): the production YAML pulls the
+component from GitHub (inteltryb93/esphome-danfoss-eco, master), credentials and eTRV MACs from the
+builder's secrets, OTA password-protected. Built and flashed by the builder; 0 compiler warnings.
+
+- **False client-watchdog alarm (fixed, 966be5b).** The watchdog stored its start time as `now | 1`;
+  with an even `now` the start lay 1 ms in the future and two loop passes within one millisecond made
+  `now - start` underflow. Seen once in the first production test (a normal connection attempt was
+  reset and retried 3 s later). Now a separate "armed" flag.
+- **Service rediscovery on every link (fixed, 9ea5d18).** Without Bluedroid's NVS service cache
+  ESPHome clears the stack's service table after each disconnect, and the stack rediscovers all eTRV
+  services at the start of the next link before our first request goes out. New option
+  `cache_services` (default on, the same setting as bluetooth_proxy's): the table stays in flash; it is
+  cleared before a discovery if the layout looked different, and before onboarding.
+
+| link phase (4 eTRVs, weak signal) | before | with the cache |
+|---|---|---|
+| link open → first answer, median / p90 | 2.07 s / 7.9 s | 0.19 s / 0.31 s |
+| whole link, median / p90 / max | 2.55 s / 10.7 s / 17.3 s | 0.70 s / 1.05 s / 5.2 s (a first link after boot) |
+| first link after a reboot (with discovery + informational reads) | 15.6 s | 4.1 s |
+| median command latency (parallel test) | 43 s | 19 s |
+
+Other Bluetooth centrals: none of the user's ESPHome Bluetooth proxies holds a connection to an eTRV
+(all connection slots free); two of them hear an eTRV (salon at -70 dBm, kuchnia at -99 dBm). Removing
+them is not necessary; if they scan actively, switching them to passive scanning spares the eTRVs the
+scan responses.
+
+## Stress tests and the retry policy for failed opens (2026-09-29, fifth pass)
+
+Test: `tools/scenario_test.py` on a VERBOSE build, all four eTRVs at their weak signal: parallel
+(all four set points at once, then back), readonly (a re-send that forces a verifying read on all
+four), same (two writes to one eTRV back to back), ab (A, B, A again, B again), double (a second
+command 150 ms after the first), mixed (half write, half read at once), cold (first command after a
+reboot). Every command is timed from the API send to the value read back from the eTRV. Home
+Assistant writes its own set points every 10 min (at hh:m0, only when they differ); the test keeps
+clear of that minute and follows a value HA sets.
+
+**Connection establishment is the whole latency.** Once connected, a link takes 0.3-0.7 s (reads)
+or 0.6-1.3 s (writes), PIN 0.1 s after the open. Over ~2900 connection attempts (all logs of this
+work): 64 % connect within ESPHome's 20 s `connection_timeout`, median 6 s after the attempt starts.
+The success rate of a running attempt is 4-7 % per second for the whole 20 s (a shorter timeout
+would not help), it does not depend on how long ago the previous link to that eTRV ended (no faster
+advertising after a disconnect), and waiting after a failed attempt does not raise it (55 % within
+20 s after the failure, 61-66 % 20-200 s later; 57-63 % after 1-5 failures in a row; every eTRV
+connected in the end, after at most 8). Per eTRV: kanciapamamy (-67 dBm) and kuchnia (-65 dBm)
+74-76 %, sypialnia (-80 dBm) and salon (-88 dBm) 53-55 %: even at a strong signal a quarter of the
+attempts fail, the eTRV advertises only every few seconds and the initiator listens half of the time
+(Bluedroid's 30 ms / 60 ms direct-connect scan, which ESPHome's BLE client offers no way to change).
+
+**Retry policy changed accordingly.** Before, a failed open was retried after 15 s, then 30 s, 60 s,
+120 s (the eTRV "at the edge of the range" was not to block the others). A failed open costs the
+eTRV nothing, so the radio idled for nothing: 40 % of the time during which work was pending. Now a
+failed open is retried after 3 s, up to 6 times in a row, with the ble_client left enabled for
+auto_connect; a thermostat that has just failed lets any other that is waiting go first (the
+tracker promotes the first waiting client in its list, so this makes it round robin); only an eTRV
+that fails more often than that gets the back-off ladder (15 s ... 2 min) and then the slow phase.
+
+| same suite, same night (VERBOSE build) | old policy (back-off) | new policy |
+|---|---|---|
+| connection attempts that connected | 57 % of 136 | 64 % of 223 |
+| **radio idle while work was pending** | **40 %** | **7 %** |
+| parallel, all four done: median / max (6 rounds) | 80 s / 299 s | 86 s / 151 s |
+| readonly, per thermostat: median / max | 52 s / 335 s | 25 s / 86 s |
+| same (24 writes): median / p90 / max | 14 s / 80 s / 168 s | 13 s / 52 s / 57 s |
+| a write after 1 / 2 / 3 failed opens | 33-52 / 75-83 / 168 s | 16-44 / 46-57 / 69-109 s |
+| double: first value written although superseded | - | 0 of 12 |
+| cold: first command after a reboot, median / max | - | 14 s / 56 s (first link 4.7-7.4 s) |
+| timeouts / anomalies in the device log | 1 / 0 | 0 / 0 |
+
+The old run was cut short in its ab scenario by a lost API connection to the test PC (the ESP did
+not reboot, the PC's network did not drop); the new run counted the ESP's WiFi disconnects: none in
+1.6 h (signal -64 dBm), no API connection loss, although the Bluetooth initiator (which the tracker
+runs with the coexistence preference on Bluetooth) is now busy most of the time while work is
+pending.
+
+Monte Carlo with the measured attempt statistics (20000 runs): one command median 14 s both, p90
+91 -> 52 s, p99 314 -> 102 s; four at once median 88 -> 76 s, p90 210 -> 138 s, p99 552 -> 209 s.
+
+Answers on an established link (with the persistent service cache, 2682 of them tonight): median
+65 ms, p99 0.3 s, never more than 0.65 s. Once in ~500 links an eTRV stopped answering right after a
+set point write while the link itself stayed up (probably busy moving the valve): `request_timeout`
+(15 s) closed the link and the next one read the new value back. The timeout stays at 15 s, because
+without the service cache the stack's own discovery can delay the first answer by that much.
+
+ESPHome's BLE client logs every open that is not answered within `connection_timeout` as
+`[E] ESP_GATTC_OPEN_EVT in DISCONNECTING state (status=133)` + `[W] Connection open error` (the
+stack reports the failed connection before the open result); documented in the README as expected
+at a weak signal.

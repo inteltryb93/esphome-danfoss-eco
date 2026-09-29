@@ -42,11 +42,13 @@ namespace esphome
     //   link lost half-way  -> the pending flags survive and are retried on a new link
     //                          (informational reads never cause or retry a link of their own)
     //
-    // Retries: a fast phase (retry_window, back-off 3/15/30/60/120 s) followed by a slow phase
-    // (every 5 min, after one hour every 15 min). A requested set point / mode is NEVER dropped on a
-    // timer before COMMAND_TTL (24 h): an eTRV at the edge of the range gets it as soon as it is
-    // reachable again. Only protocol errors that retrying cannot fix (PIN rejected, data that cannot
-    // be decrypted = wrong secret_key, missing characteristics) give up after MAX_HARD_ERRORS.
+    // Retries: a fast phase (retry_window, back-off 3/15/30/60/120 s; an open that failed because
+    // the eTRV was not heard is retried after 3 s up to 6 times in a row, round robin with the other
+    // thermostats) followed by a slow phase (every 5 min, after one hour every 15 min). A requested
+    // set point / mode is NEVER dropped on a timer before COMMAND_TTL (24 h): an eTRV at the edge of
+    // the range gets it as soon as it is reachable again. Only protocol errors that retrying cannot
+    // fix (PIN rejected, data that cannot be decrypted = wrong secret_key, missing characteristics)
+    // give up after MAX_HARD_ERRORS.
     //
     // Safety nets (each one alone prevents a hung link that would drain the eTRV battery):
     //   * in-flight request counter reset on every link loss,
@@ -98,13 +100,14 @@ namespace esphome
       void drop_writes_(const char *reason, bool temperature = true, bool settings = true);
       void save_pending_();
       void load_pending_();
-      void schedule_retry_(const char *why);
+      void schedule_retry_(const char *why, bool quick = false);
       bool send_read_(DeviceProperty *p);
       bool send_write_(WritableProperty *p, uint8_t *buff, uint16_t len);
       bool has_writes_() const { return this->pending_write_temperature_ || this->pending_write_settings_; }
       bool has_pending_() const { return this->pending_read_ || this->has_writes_() || this->pending_secret_key_ || this->pending_time_sync_ || this->pending_e10_ack_; }
       bool in_fast_phase_(uint32_t now) const { return (now - this->txn_started_ms_) < this->retry_window_ms_; }
       bool sibling_connecting_() const;
+      bool sibling_waiting_() const;
       void publish_connection_(bool connected);
       void evaluate_clock_();
       bool time_sync_enabled_() const;
@@ -208,6 +211,7 @@ namespace esphome
       uint32_t last_fast_rearm_ms_{0};
       uint8_t connect_attempts_{0};      // explicit link requests made in this transaction
       uint8_t open_failures_{0};         // failed opens of any origin (ours or auto_connect)
+      uint8_t opens_failed_in_row_{0};   // ... since the eTRV was last heard (link came up)
       uint8_t links_this_txn_{0};        // links actually established in this transaction
       uint8_t retry_count_{0};           // failures in this fast phase (back-off index)
       uint32_t next_connect_ms_{0};      // earliest time for the next connection request

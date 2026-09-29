@@ -30,8 +30,17 @@ namespace esphome
     // Pause before the follow-up link of a transaction that needs two links (mode, then set point).
     static constexpr uint32_t RECONNECT_DELAY_MS = 3000;
     // Fast phase back-off (index = failures in this fast phase): 3 s, 15 s, 30 s, 60 s, then 120 s.
-    // A failed open (the eTRV was not heard for 20 s) starts at 15 s.
+    // A failed open (the eTRV was not heard for 20 s) is handled by QUICK_OPEN_RETRIES first; if
+    // the ladder is reached that way, it starts at 15 s.
     static constexpr uint32_t RETRY_BACKOFF_MS[] = {3000, 15000, 30000, 60000, 120000};
+    // A failed open costs the eTRV nothing, and a long pause buys little: measured over ~2900
+    // attempts to 4 eTRVs at a weak signal, 64 % of all attempts connected; after a failed open 55 %
+    // of the attempts made within 20 s and 61-66 % of those made 20-200 s later did, and 57-63 %
+    // after 1-5 failed opens in a row (every eTRV connected in the end, after at most 8). So up to
+    // this many failed opens in a row are retried after RETRY_BACKOFF_MS[0] (behind any sibling
+    // that is already waiting for the radio, see loop()); only an eTRV that fails more often than
+    // that (most likely out of reach: battery removed, moved away) gets the back-off ladder.
+    static constexpr uint8_t QUICK_OPEN_RETRIES = 6;
     // Slow phase (after retry_window): every 5 min, after one more hour every 15 min. A failed open
     // costs the eTRV nothing but blocks the other thermostats for 20 s: 6.7 % resp. 2.2 % airtime.
     static constexpr uint32_t SLOW_RETRY_MS = 300000;
@@ -145,6 +154,17 @@ namespace esphome
       for (auto *d : all_devices())
       {
         if (d != this && d->parent()->state() == ClientState::CONNECTING)
+          return true;
+      }
+      return false;
+    }
+
+    // Another eTRV has asked the tracker for a link and is waiting to be promoted.
+    bool Device::sibling_waiting_() const
+    {
+      for (auto *d : all_devices())
+      {
+        if (d != this && d->parent()->state() == ClientState::DISCOVERED)
           return true;
       }
       return false;
@@ -417,7 +437,10 @@ namespace esphome
         {
           if (pst == ClientState::IDLE)
           {
-            if ((int32_t)(now - this->next_connect_ms_) >= 0)
+            // After a failed open a sibling that is already waiting for the radio goes first: the
+            // tracker promotes the first waiting client in its list, so without this the eTRVs early
+            // in the list would win every round while several of them keep failing (round robin).
+            if ((int32_t)(now - this->next_connect_ms_) >= 0 && !(this->opens_failed_in_row_ > 0 && this->sibling_waiting_()))
               this->try_connect_();
           }
           else if (pst == ClientState::DISCOVERED)
@@ -596,6 +619,7 @@ namespace esphome
         this->slow_phase_ = false;
         this->connect_attempts_ = 0;
         this->open_failures_ = 0;
+        this->opens_failed_in_row_ = 0;
         this->links_this_txn_ = 0;
         this->retry_count_ = 0;
         this->next_connect_ms_ = now;
@@ -614,6 +638,7 @@ namespace esphome
         this->slow_phase_ = false;
         this->retry_count_ = 0;
         this->open_failures_ = 0;
+        this->opens_failed_in_row_ = 0;
         this->last_fast_rearm_ms_ = now;
         if (!this->link_up_)
           this->next_connect_ms_ = now;
@@ -969,17 +994,24 @@ namespace esphome
         this->schedule_retry_(why);
     }
 
-    void Device::schedule_retry_(const char *why)
+    void Device::schedule_retry_(const char *why, bool quick)
     {
       const uint32_t now = millis();
       uint32_t delay;
       if (!this->slow_phase_ && this->in_fast_phase_(now))
       {
-        const size_t last = sizeof(RETRY_BACKOFF_MS) / sizeof(RETRY_BACKOFF_MS[0]) - 1;
-        const size_t idx = this->retry_count_ > last ? last : this->retry_count_;
-        delay = RETRY_BACKOFF_MS[idx];
-        if (this->retry_count_ < 255)
-          this->retry_count_++;
+        if (quick)
+        {
+          delay = RETRY_BACKOFF_MS[0]; // does not advance the ladder
+        }
+        else
+        {
+          const size_t last = sizeof(RETRY_BACKOFF_MS) / sizeof(RETRY_BACKOFF_MS[0]) - 1;
+          const size_t idx = this->retry_count_ > last ? last : this->retry_count_;
+          delay = RETRY_BACKOFF_MS[idx];
+          if (this->retry_count_ < 255)
+            this->retry_count_++;
+        }
       }
       else
       {
@@ -1095,6 +1127,7 @@ namespace esphome
         this->clock_ok_this_link_ = false;
         this->wrote_settings_this_link_ = false;
         this->wrote_temperature_this_link_ = false;
+        this->opens_failed_in_row_ = 0; // the eTRV heard us
         if (this->want_link_ && this->links_this_txn_ < 255)
           this->links_this_txn_++;
         ESP_LOGD(TAG, "[%s] connect, conn_id=%d", this->get_name().c_str(), param->connect.conn_id);
@@ -1135,26 +1168,30 @@ namespace esphome
         else
         {
           // Nothing usable was established (e.g. status 0x85 after the 20 s open timeout: the eTRV
-          // was not heard). The first time the ble_client stays enabled so the tracker's
-          // auto_connect can connect the moment the eTRV is heard advertising; after that it is
-          // parked between the backed-off attempts, because every 20 s open attempt of an eTRV at
-          // the edge of the range delays the other thermostats (one connection at a time).
+          // was not heard). Up to QUICK_OPEN_RETRIES times in a row this is retried after 3 s, with
+          // the ble_client left enabled so the tracker's auto_connect can also connect the moment
+          // the eTRV is heard advertising. After that the eTRV is most likely out of reach: the
+          // client is parked between the backed-off attempts, because every 20 s open attempt
+          // delays the other thermostats (the tracker connects one client at a time).
           this->link_up_ = false;
           this->inflight_ = 0;
           if (this->open_failures_ < 255)
             this->open_failures_++;
-          ESP_LOGW(TAG, "[%s] failed to open, status=%#04x (failed opens %u)", this->get_name().c_str(), param->open.status, (unsigned)this->open_failures_);
+          if (this->opens_failed_in_row_ < 255)
+            this->opens_failed_in_row_++;
+          ESP_LOGW(TAG, "[%s] failed to open, status=%#04x (failed opens %u, %u in a row)", this->get_name().c_str(), param->open.status, (unsigned)this->open_failures_, (unsigned)this->opens_failed_in_row_);
           if (!this->want_link_)
           {
             this->parent()->set_enabled(false); // unsolicited auto_connect attempt, nothing to do
           }
           else
           {
-            if (this->open_failures_ >= 2)
+            const bool quick = this->opens_failed_in_row_ <= QUICK_OPEN_RETRIES;
+            if (!quick)
               this->parent()->set_enabled(false);
             if (this->retry_count_ == 0)
-              this->retry_count_ = 1; // the open itself already took 20 s: start the ladder at 15 s
-            this->schedule_retry_(this->open_failures_ >= 2 ? "open failed again, client parked until the next attempt" : "open failed, client stays enabled for auto_connect");
+              this->retry_count_ = 1; // the open itself already took 20 s: the ladder starts at 15 s
+            this->schedule_retry_(quick ? "open failed, client stays enabled for auto_connect" : "open failed again, client parked until the next attempt", quick);
           }
         }
         break;
