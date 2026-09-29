@@ -43,12 +43,12 @@ namespace esphome
     //                          (informational reads never cause or retry a link of their own)
     //
     // Retries: a fast phase (retry_window, back-off 3/15/30/60/120 s; an open that failed because
-    // the eTRV was not heard is retried after 3 s up to 6 times in a row, round robin with the other
-    // thermostats) followed by a slow phase (every 5 min, after one hour every 15 min). A requested
-    // set point / mode is NEVER dropped on a timer before COMMAND_TTL (24 h): an eTRV at the edge of
-    // the range gets it as soon as it is reachable again. Only protocol errors that retrying cannot
-    // fix (PIN rejected, data that cannot be decrypted = wrong secret_key, missing characteristics)
-    // give up after MAX_HARD_ERRORS.
+    // the eTRV was not heard is retried after 3 s up to 6 times in a row, first come first served
+    // with the other thermostats) followed by a slow phase (every 5 min, after one hour every
+    // 15 min). A requested set point / mode is NEVER dropped on a timer before COMMAND_TTL (24 h): an
+    // eTRV at the edge of the range gets it as soon as it is reachable again. Only protocol errors
+    // that retrying cannot fix (PIN rejected, data that cannot be decrypted = wrong secret_key,
+    // missing characteristics) give up after MAX_HARD_ERRORS.
     //
     // Safety nets (each one alone prevents a hung link that would drain the eTRV battery):
     //   * in-flight request counter reset on every link loss,

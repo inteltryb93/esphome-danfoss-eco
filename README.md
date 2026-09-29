@@ -299,16 +299,18 @@ guarantees that no link is ever left open:
    keeps the service table in flash, so it does not rediscover it on every link either (without the
    cache every link started with a ~2 s, at a weak signal >10 s, discovery by the stack). Anything
    unexpected at those handles (ATT error, wrong value length, rejected PIN) makes the next link
-   discover again, from the eTRV itself.
+   discover again, from the eTRV itself - unless the handles already came from the eTRV itself (then
+   it is a wrong `pin_code` or the eTRV's error code, and rediscovering every poll would only cost
+   7-11 s of link time; such handles are trusted for a day).
 4. If a link is lost half-way, the pending operations survive and are retried (see `retry_window`).
    A failed *open* (status 0x85, eTRV not heard for 20 s) costs the eTRV nothing, and waiting longer
    does not make the next attempt more likely to connect (measured: ~64 % of the attempts connect,
    whatever came before), so it is retried after 3 s, up to 6 times in a row. Meanwhile the client
-   stays enabled, so the tracker's `auto_connect` can also connect the moment the eTRV is heard
-   advertising, and a thermostat that has just failed lets the others that are waiting go first
-   (the tracker connects one client at a time, round robin). An eTRV that fails more often than
-   that is most likely out of reach: it is parked between backed-off attempts (15 s ... 2 min, then
-   the slow phase).
+   stays enabled (when the next link needs no service discovery), so the tracker's `auto_connect` can
+   also connect the moment the eTRV is heard advertising. The tracker connects one client at a time;
+   among thermostats that have failed, the one that has waited longest goes first (first come, first
+   served). An eTRV that fails more often than that is most likely out of reach: it is parked between
+   backed-off attempts (15 s ... 2 min, then the slow phase).
    ESPHome's BLE client logs every such attempt as
    `[E][esp32_ble_client] ESP_GATTC_OPEN_EVT in DISCONNECTING state (status=133)` followed by
    `[W] Connection open error, status=133` (the stack reports the failed connection before the open

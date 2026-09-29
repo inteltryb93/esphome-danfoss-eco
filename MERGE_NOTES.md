@@ -436,3 +436,24 @@ timeouts, 0 anomalies, no WiFi or API connection loss, radio idle 8 % while work
 The API connection loss at 03:04 during the old-policy run was a network-wide event: Home
 Assistant's history shows eight WiFi devices of the house unavailable within 40 s at that moment
 (most likely the access point) and the controller back one second later without a reboot.
+
+**Heap exhaustion during a WiFi disturbance (13:06, production build, soak test running).** Two
+other WiFi devices of the house dropped out of Home Assistant at 13:05:57-13:06:20; the controller
+stayed associated but stopped delivering to its API clients (Home Assistant, the soak tool with a
+DEBUG log subscription and a link every few seconds, a heap recorder), fell off the network at
+13:08 and came back at 13:12 without a reboot - with 20.7 kB of free heap and a largest free block
+of 1.3 kB (normally 75-78 kB / 57 kB). As soon as the test tools' connections were closed the heap
+was back at 78 kB / 57 kB: not a leak, but data held for stalled TCP connections (ESP-IDF defaults:
+up to 32 dynamic WiFi TX buffers, 5.7 kB TCP send buffer per connection, 12 retransmissions before a
+connection is given up; ESPHome's own API backlog is capped at 8 messages per connection). With only
+Home Assistant connected (no log subscription) the traffic during such a stall is a few state
+updates. Not changed (no way to reproduce a stall of the ESP's own WiFi link here): the WiFi / lwIP
+buffer settings. Advice: do not keep a log viewer connected permanently over a weak WiFi link.
+
+**Soak of the production build (d0019b5), 7 h 46 min** (13:17-21:03, read-only links to all four
+eTRVs as fast as the component allows, a write pair every 30 min; heap sampled every 30 s): 1028
+links out of 1747 connection attempts (59 %; ~500 times the production link rate), 0 anomalies (no
+watchdog, request timeout, protocol error, link lost with requests in flight, handle invalidation or
+late open result), 0 component errors, no reboot, no API connection loss. Free heap 78.3 -> 75.9 kB
+with a trend of +71 B/h (no leak); short dips to 59-66 kB (Home Assistant reconnects, WiFi) always
+came back; largest free block median 57 kB, minimum 31.7 kB. Radio idle while work was pending: 2 %.
