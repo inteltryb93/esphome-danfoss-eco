@@ -4,6 +4,8 @@
 
 #include <esp_bt_defs.h>
 
+#include <string>
+
 namespace esphome
 {
     namespace danfoss_eco
@@ -27,5 +29,11 @@ namespace esphome
         bool decrypt(shared_ptr<Xxtea> &xxtea, uint8_t *value, uint16_t value_len);
 
         void copy_address(uint64_t, esp_bd_addr_t);
+
+        // Text read from the eTRV as valid UTF-8 (the API sends text sensor states as protobuf
+        // strings; invalid UTF-8 makes Home Assistant drop the whole connection): an incomplete
+        // sequence at the end (text cut at the characteristic's length) is dropped, any other
+        // invalid byte becomes '?'.
+        string sanitize_utf8(const string &in);
     }
 }

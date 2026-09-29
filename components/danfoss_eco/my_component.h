@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
@@ -59,9 +61,14 @@ namespace esphome
                 return traits;
             }
 
-            // Updates the visual gauge range (called with the device-reported min/max after a read).
+            // Updates the visual gauge range (called with the device-reported min/max after a read),
+            // never beyond what control() accepts (5-30 C).
             void set_temperature_range(float min_temp, float max_temp)
             {
+                min_temp = std::max(5.0f, min_temp);
+                max_temp = std::min(30.0f, max_temp);
+                if (min_temp >= max_temp)
+                    return;
                 this->visual_min_temperature_ = min_temp;
                 this->visual_max_temperature_ = max_temp;
             }
@@ -140,6 +147,10 @@ namespace esphome
             // Publishes the climate state after the properties updated it from a device read. The Device
             // overrides this to keep showing values that are requested but not yet written.
             virtual void publish_climate_state() { this->publish_state(); }
+            // A read response changed the climate fields. The Device publishes them once, when the
+            // whole read batch is in (or the link ends), so that the set point and the mode of one
+            // read never reach Home Assistant separately (e.g. the frost set point still with HEAT).
+            void mark_climate_changed() { this->climate_changed_ = true; }
 
         protected:
             Sensor *battery_level_{nullptr};
@@ -175,6 +186,8 @@ namespace esphome
             Sensor *schedule_home_temperature_{nullptr};
             Sensor *schedule_away_temperature_{nullptr};
             TextSensor *info_sensors_[INFO_COUNT]{};
+
+            bool climate_changed_{false};
 
             float visual_min_temperature_{5.0f};
             float visual_max_temperature_{30.0f};

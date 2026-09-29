@@ -65,7 +65,9 @@ namespace esphome
     class Device : public MyComponent, public esphome::ble_client::BLEClientNode
     {
     public:
-      Device() : xxtea(make_shared<Xxtea>()){};
+      // The properties exist from construction on: control() may run before setup() (an on_boot
+      // automation with the default priority is set up before this component).
+      Device() : xxtea(make_shared<Xxtea>()) { this->create_properties_(); }
 
       void dump_config() override;
 
@@ -108,6 +110,10 @@ namespace esphome
       bool in_fast_phase_(uint32_t now) const { return (now - this->txn_started_ms_) < this->retry_window_ms_; }
       bool sibling_connecting_() const;
       bool sibling_waiting_() const;
+      bool older_sibling_due_() const;
+      // The next link can go without service discovery (auto_connect may open it on its own).
+      bool auto_connect_ok_() const;
+      bool handles_trusted_() const;
       void publish_connection_(bool connected);
       void evaluate_clock_();
       bool time_sync_enabled_() const;
@@ -120,6 +126,7 @@ namespace esphome
       bool issue_info_batch_();
       void publish_schedule_();
 
+      void create_properties_();
       void write_pin();
       void on_write_pin(esp_ble_gattc_cb_param_t::gattc_write_evt_param);
       bool on_link_ready_();
@@ -128,6 +135,7 @@ namespace esphome
       void on_read(esp_ble_gattc_cb_param_t::gattc_read_char_evt_param);
       void on_write(esp_ble_gattc_cb_param_t::gattc_write_evt_param);
       void on_batch_complete_();
+      void flush_climate_state_();
 
       void log_link_(const char *where, int level);
       uint32_t link_age_ms_() const;
@@ -187,6 +195,7 @@ namespace esphome
       ClimateMode mode_before_request_{ClimateMode::CLIMATE_MODE_HEAT};
       uint32_t last_read_ms_{0};             // last complete, plausible read of the device state
       bool read_once_{false};
+      bool read_recent_{false};              // last_read_ms_ is younger than FRESH_READ_MS (cleared by loop(): wrap-safe)
       uint32_t last_time_sync_ms_{0};        // last clock write attempt (OK or not)
       bool time_sync_attempted_{false};
       uint32_t last_e10_ack_ms_{0};          // last E10 acknowledgment attempt (OK or not)
@@ -215,6 +224,8 @@ namespace esphome
       uint8_t links_this_txn_{0};        // links actually established in this transaction
       uint8_t retry_count_{0};           // failures in this fast phase (back-off index)
       uint32_t next_connect_ms_{0};      // earliest time for the next connection request
+      bool due_waiting_{false};          // next_connect_ms_ has passed, the request is still waiting
+      uint32_t due_since_ms_{0};         // ... since then (first come, first served among the eTRVs)
       uint32_t connect_requested_ms_{0}; // when we set DISCOVERED (promotion fallback timer)
       bool boot_disable_done_{false};
       uint8_t consecutive_hard_errors_{0};
@@ -222,6 +233,12 @@ namespace esphome
       // GATT handles: resolved by service discovery on the first link after boot, then reused on
       // every following link without discovery (ESPHome V3_WITH_CACHE client mode).
       bool handles_verified_{false};
+      // ... and they came from a discovery answered by the eTRV itself (not from a cached table):
+      // then a rejected PIN / read / write or the eTRV's 1-byte error code is not a layout problem
+      // (typically a wrong pin_code), and rediscovering would only cost 7-11 s of link time per poll.
+      bool handles_from_device_{false};
+      uint32_t handles_from_device_ms_{0}; // ... since (trusted for a day: a later eTRV firmware may change the layout)
+      bool discovery_from_device_{false};  // the discovery of the current link was not answered from a cache
       // The stack's (persistent) service table must be rebuilt before the next discovery.
       bool gatt_cache_clean_pending_{false};
 

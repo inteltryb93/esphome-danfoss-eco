@@ -349,11 +349,13 @@ that fails more often than that gets the back-off ladder (15 s ... 2 min) and th
 | cold: first command after a reboot, median / max | - | 14 s / 56 s (first link 4.7-7.4 s) |
 | timeouts / anomalies in the device log | 1 / 0 | 0 / 0 |
 
-The old run was cut short in its ab scenario by a lost API connection to the test PC (the ESP did
-not reboot, the PC's network did not drop); the new run counted the ESP's WiFi disconnects: none in
-1.6 h (signal -64 dBm), no API connection loss, although the Bluetooth initiator (which the tracker
-runs with the coexistence preference on Bluetooth) is now busy most of the time while work is
-pending.
+The old run was cut short in its ab scenario by a lost API connection (the test tool did not
+reconnect yet). Not the controller: Home Assistant's history shows eight WiFi devices of the house
+becoming unavailable within 40 s at that moment (a network-wide event, most likely the access
+point), and the controller back in HA one second later without a reboot. The new run counted the
+ESP's WiFi disconnects: none in 1.6 h (signal -64 dBm), no API connection loss, although the
+Bluetooth initiator (which the tracker runs with the coexistence preference on Bluetooth) is now
+busy most of the time while work is pending.
 
 Monte Carlo with the measured attempt statistics (20000 runs): one command median 14 s both, p90
 91 -> 52 s, p99 314 -> 102 s; four at once median 88 -> 76 s, p90 210 -> 138 s, p99 552 -> 209 s.
@@ -386,3 +388,51 @@ txab`):
 limits a connection is the ESP hearing the eTRV's sparse advertising, not the eTRV hearing the ESP;
 the production configuration keeps the default. No WiFi disconnect and no API connection loss in
 these 1.9 h either (WiFi -56...-64 dBm); the one request timeout described above was the only anomaly.
+
+## Code review, fork survey and targeted tests (2026-09-29, sixth pass)
+
+Two independent reviews of the component (time / state machine; data / memory) and a survey of all
+22 forks of the base project (FORKS_REVIEW.md, section 7). Buffers, parsing, time arithmetic,
+persistence and memory were found correct (all lengths checked before copying, no leaks, format
+strings match, every millis() comparison wrap-safe). Fixed:
+
+- **control() before setup() crashed** (null properties): an `on_boot` automation with the default
+  priority runs before the component's setup. The properties are now created in the constructor; a
+  command given that early wins over a request saved before the restart and is saved itself.
+- **"Round robin" after failed opens was a fixed priority by list order**: only one eTRV can wait
+  in the tracker, and the first due one in loop order took the slot, so with three or four eTRVs
+  failing at once the last one got 3 attempts in 10 min against 9 for the others (simulated). Now
+  first come, first served: the eTRV that has been due longest goes first (simulated: 8/8/7/7).
+- **Links opened by auto_connect reused stale settings** (the connection type of the previous
+  attempt): V3 is set as soon as a discovery has verified the handles, and the client is left
+  enabled for auto_connect only when the next link needs no discovery and no cache clean.
+- **A wrong `pin_code` cost a full service rediscovery on every poll** (7-11 s link instead of 0.7 s):
+  a rejected PIN / request, or the eTRV's 1-byte error code, no longer forces a rediscovery when the
+  handles came from a discovery answered by the eTRV itself (trusted for a day, so a changed layout
+  after an eTRV firmware update is still found). Found via a fork that stops after 5 rejections.
+- **Two climate publishes per read** (set point with the previous mode in between, e.g. the frost
+  set point still with HEAT when the eTRV was paused at the dial): the climate state is published once
+  per read batch (and when a link ends).
+- **Texts from the eTRV are made valid UTF-8** (name, device information): a name cut in the middle
+  of a multi-byte character or erased flash (0xFF) would have been sent as an invalid protobuf string,
+  on which Home Assistant drops the whole API connection. Host-tested with 12 cases.
+- A battery level above 100 is shown as unknown instead of counting as a protocol error (three of
+  them used to make a transaction give up and drop a requested set point); `problems_detail` is cut
+  at Home Assistant's 255 characters; the dynamic gauge range never exceeds what control() accepts;
+  the "fresh read" check is wrap-safe (flag cleared by loop()); a late open result on an idle client
+  is ignored; a re-sent identical pending value refreshes its TTL; the `shared_ptr` the properties hold
+  to their component no longer owns it (latent double free, found via a fork); the scanner logs each
+  eTRV once (plus pairing window changes) instead of every advertisement.
+
+Targeted tests on the fixed build (VERBOSE), all passed: a write followed by a restart 0.3 s later is
+delivered after the boot (2/2); set points outside the range (3.0, 4.5, 29.0 = above this eTRV's own
+maximum of 28, 35.0) are refused without a link (4/4); ten commands within a second give one link and
+one write of the last value (2/2); a second command 150 ms after the first never lets the first reach
+the eTRV (8/8); pause and schedule round trips (OFF -> HEAT, AUTO -> HEAT) change only the mode byte.
+Measured device behaviour: OFF -> HEAT restores the manual set point, AUTO -> HEAT keeps the
+schedule's set point (documented in the README). Regression suite (parallel, same, mixed, cold): 0
+timeouts, 0 anomalies, no WiFi or API connection loss, radio idle 8 % while work was pending.
+
+The API connection loss at 03:04 during the old-policy run was a network-wide event: Home
+Assistant's history shows eight WiFi devices of the house unavailable within 40 s at that moment
+(most likely the access point) and the controller back one second later without a reboot.

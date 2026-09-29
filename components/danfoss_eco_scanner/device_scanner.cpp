@@ -24,13 +24,26 @@ namespace esphome
             if (name.length() <= s_len || name.compare(name.length() - s_len, s_len, eTRV_SUFFIX) != 0)
                 return false;
 
+            // the first character of the name is a digit whose bit 2 is set while the pairing window is
+            // open (hardware button pressed): the secret key can be read now
+            const uint8_t flags = (uint8_t)name.c_str()[0];
+            const bool ready = (flags & 0x4) != 0;
+            const uint64_t address = device.address_uint64();
+            auto it = this->seen_.find(address);
+            if (it != this->seen_.end() && it->second == ready)
+                return true; // already reported in this state
+            if (it != this->seen_.end() || this->seen_.size() < MAX_SEEN)
+                this->seen_[address] = ready;
+
             // address_str() is deprecated since ESPHome 2026.8.0 (removed in 2027.2.0)
             char addr[MAC_ADDRESS_PRETTY_BUFFER_SIZE];
-            ESP_LOGI(TAG, "Found Danfoss eTRV, MAC: %s, Name: %s", device.address_str_to(addr), name.c_str());
-
-            uint8_t flags = (uint8_t)name.c_str()[0];
-            if ((flags & 0x4) >> 2)
-                ESP_LOGI(TAG, "Ready to read the secret key");
+            device.address_str_to(addr);
+            if (it == this->seen_.end())
+                ESP_LOGI(TAG, "Found Danfoss eTRV, MAC: %s, Name: %s, RSSI: %d dBm", addr, name.c_str(), device.get_rssi());
+            if (ready)
+                ESP_LOGI(TAG, "%s: ready to read the secret key (pairing window open)", addr);
+            else if (it != this->seen_.end())
+                ESP_LOGI(TAG, "%s: pairing window closed", addr);
 
             return true;
         }

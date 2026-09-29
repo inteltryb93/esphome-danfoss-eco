@@ -89,8 +89,11 @@ namespace esphome
             uint8_t battery_level = value[0];
             if (battery_level > 100)
             {
-                ESP_LOGW(TAG, "[%s] implausible battery level %u %%, ignoring", this->component_->get_name().c_str(), battery_level);
-                return false;
+                // Not a protocol error (it must never make a transaction give up and drop a requested
+                // set point): the level is simply unknown this time.
+                ESP_LOGW(TAG, "[%s] battery level %u %% out of range - shown as unknown", this->component_->get_name().c_str(), battery_level);
+                publish_sensor(this->component_->battery_level(), NAN);
+                return true;
             }
             ESP_LOGD(TAG, "[%s] battery level: %d %%", this->component_->get_name().c_str(), battery_level);
             publish_sensor(this->component_->battery_level(), battery_level);
@@ -119,7 +122,7 @@ namespace esphome
 
             this->component_->target_temperature = t_data->target_temperature;
             this->component_->current_temperature = t_data->room_temperature;
-            this->component_->publish_climate_state();
+            this->component_->mark_climate_changed();
             return true;
         }
 
@@ -165,7 +168,7 @@ namespace esphome
             c->mode = s_data->device_mode;
             // Update the visual gauge range from the device-reported min/max (see my_component.h).
             c->set_temperature_range(s_data->temperature_min, s_data->temperature_max);
-            c->publish_climate_state();
+            c->mark_climate_changed();
             return true;
         }
 
@@ -246,6 +249,7 @@ namespace esphome
             string text;
             for (uint16_t i = 0; i < value_len && value[i] != 0; i++)
                 text.push_back((value[i] < 0x20 || value[i] == 0x7F) ? ' ' : (char)value[i]);
+            text = sanitize_utf8(text);
             const size_t first = text.find_first_not_of(' ');
             const size_t last = text.find_last_not_of(' ');
             this->value_ = first == string::npos ? string() : text.substr(first, last - first + 1);

@@ -569,3 +569,25 @@ Relative to `components/danfoss_eco` (commit `702c012` + current uncommitted dia
 | Queue | FreeRTOS queue (blocking push) with `size()`/`clear()` | `LockFreeQueue` (non-blocking, drops when full, no `clear()`) |
 
 Things no fork has: cancellation of a client stuck in `CONNECTING` (ESPHome itself has no CONNECTING timeout; `disconnect()` in that state only sets `want_disconnect_`); explicit handling of `DISCONNECTING`; any use of `esp_ble_gap_update_conn_params` for the eTRV.
+
+## 7. Update 2026-09-29: forks of forks, later commits
+
+The network has 22 forks: 17 direct ones (section 1) and 5 forks of forks that the survey above
+missed: borstel4711, dhewson and Drak63 (of ckoca), MindTwister and lars-ryssel-trackman (of
+ryssel). All branches were fetched and compared with what this repository already does.
+
+| Fork | Unique commits | What they do | Taken over |
+|---|---|---|---|
+| borstel4711 | 14 (master + 4 branches, until 2026-07-19) | sequential connection manager with a session watchdog, summer mode (poll every 2 h while an HA heating entity is `off`), PoE gateway example with an external antenna, scanner log dedupe, no-op deleter for the `shared_ptr` to the component, stop after 5 PIN rejections | scanner: each eTRV logged once (+ pairing window changes); non-owning `shared_ptr`; a rejected PIN no longer forces a service rediscovery when the handles came from the eTRV itself (the cost that the 5-rejection limit addresses) |
+| dhewson, Drak63 | 1, 7 | `address_str()` / `to_str()` compile fixes for newer ESPHome | already present |
+| MindTwister | 2 | reformat, inlined XXTEA (keeps upstream's 8-of-16-byte settings write bug) | nothing |
+| ryssel | 4 beyond the merged state | request watchdog with back-off, global connect slot with 700 ms gap, 5 s cooldown after a failed open, `auto_connect: false` advice | already covered by `request_timeout`, the tracker promotion and the measured retry policy (MERGE_NOTES, fifth pass); `auto_connect` stays on on purpose |
+
+No fork suggests a different protocol layout: all of them use the same bytes for set point / room
+temperature, settings (flags, min/max/frost, mode, vacation) and the error bitfield. None sets
+connection parameters, MTU or TX power. Not taken over: the summer mode (it can be built in YAML with
+`component.resume` + a templated `update_interval`; the reference configuration polls every 12 h
+anyway) and the extra gap between two eTRVs' connections (neither fork measured a benefit). The PoE
+gateway with an external antenna is worth trying where the signal is weak: it targets exactly the
+limit measured in MERGE_NOTES (the ESP hearing the eTRV's sparse advertising), and Ethernet removes
+the WiFi/Bluetooth sharing of the radio.

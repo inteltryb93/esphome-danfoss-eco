@@ -3,6 +3,8 @@
 #include "esphome/core/component.h"
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 
+#include <map>
+
 #ifdef USE_ESP32
 
 namespace esphome
@@ -27,6 +29,10 @@ namespace esphome
 
         private:
             bool read_secret_{false};
+            // eTRVs already reported, with their "ready to read the secret key" flag: every eTRV
+            // advertises every few seconds, so each one is logged once and again when the flag changes.
+            std::map<uint64_t, bool> seen_;
+            static constexpr size_t MAX_SEEN = 32;
         };
 
     } // namespace danfoss_eco_scanner

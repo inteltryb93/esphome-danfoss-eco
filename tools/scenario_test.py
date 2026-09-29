@@ -16,6 +16,12 @@ Scenarios (--scenarios, comma separated, run in this order):
   double    a second value 150 ms after the first (the first must be superseded, never written)
   readonly  re-send the current set point to all at once: read-only links (nothing written)
   mixed     writes to half of the thermostats and read-only links to the others, simultaneously
+  reboot_pending  a write, then an immediate restart: the value must reach the eTRV after the boot
+  range     set points outside the eTRV's range must be refused without a link
+  burst     ten commands within a second: only the last value may be written
+  soak      long run: read-only links to every thermostat continuously, a write pair every few
+            minutes (--soak-minutes, --soak-write-every); run tools/soak_monitor.py alongside for
+            the heap / uptime record
   txab      Bluetooth TX power A/B: read-only links to every thermostat, continuously, with the TX
             power alternating between +9 and +20 dBm every --txab-minutes (needs a test firmware with
             template buttons "BLE TX 9 dBm" / "BLE TX 20 dBm")
@@ -180,6 +186,7 @@ class Runner:
         self.active = {}
         self.sent = {}  # name -> [(value, time)] of the test's own recent commands
         self.last_link_end = {}  # name -> time of the last "closing link" (any origin)
+        self.counters = {}       # (name, event) -> count, for burst / range checks
         self.results = []
         self.anomalies = []
         self.logf = open(args.out, "a", buffering=1)
@@ -275,8 +282,12 @@ class Runner:
                 if not ours and abs(v - self.baseline[name]) > 0.01:
                     self.note(f"{name}: another client set {v:.1f} - the test restores to it from now on")
                     self.baseline[name] = v
-        if body.startswith("closing link"):
+        if body.startswith("closing link") or body.startswith("target temperature unchanged"):
+            # (an "unchanged" re-send means the component read the eTRV less than a minute ago)
             self.last_link_end[name] = t
+        for key, prefix in (("link", "requesting BLE link (attempt 1,"), ("write", "writing set point"), ("reject", "rejecting ")):
+            if body.startswith(prefix):
+                self.counters[(name, key)] = self.counters.get((name, key), 0) + 1
         c = self.active.get(name)
         if c is None or c.done.is_set():
             return
@@ -510,6 +521,126 @@ class Runner:
                 await asyncio.sleep(1)
             await self.wait([c for c in inflight.values() if not c.done.is_set()])
 
+    def count(self, name, key):
+        return self.counters.get((name, key), 0)
+
+    async def restart_and_reconnect(self):
+        if not self.connected.is_set():
+            await asyncio.wait_for(self.connected.wait(), timeout=300)
+        self.expect_drop = True
+        self.cli.button_command(self.restart_key)
+        await asyncio.sleep(3)
+        try:
+            await self.cli.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        self.connected.clear()
+        self.states = {}
+        await asyncio.sleep(5)
+        await self.connect()
+        self.expect_drop = False
+        t_up = now()
+        while len(self.states) < len(self.climates) and now() - t_up < 20:
+            await asyncio.sleep(0.2)
+
+    async def sc_reboot_pending(self):
+        # A write that has not reached the eTRV yet must survive a restart: send it, restart the
+        # controller right away (before any link), then wait for the eTRV to report the value.
+        if self.restart_key is None:
+            self.note("reboot_pending: no restart button found - skipped")
+            return
+        for r in range(self.args.repeat):
+            name = self.names()[r % len(self.names())]
+            await self.avoid_automation()
+            value = self.moved(name, +1)
+            c = await self.send(name, value, "write", "reboot_pending")
+            await asyncio.sleep(0.3)
+            self.note(f"reboot_pending: restarting with {name} -> {value:.1f} not delivered yet")
+            t0 = now()
+            await self.restart_and_reconnect()
+            # the command object was superseded by the connection loss; follow the delivery in the log
+            d = Cmd(name, value, "write", "reboot_pending: after restart")
+            d.t_send = t0
+            d.mark("ctrl", now())
+            self.active[name] = d
+            await self.wait([d])
+            ok = d.rel("delivered") is not None and not d.superseded
+            self.note(f"reboot_pending: {name} {value:.1f} {'DELIVERED after the restart' if ok else 'NOT delivered: ' + str(d.superseded)}")
+            self.results.append(("reboot_pending_delivered", 1.0 if ok else 0.0))
+            c = await self.send(name, self.baseline[name], "write", "reboot_pending: restore")
+            await self.wait([c])
+
+    async def sc_range(self):
+        # Set points outside the eTRV's range must be refused without a link or a write.
+        name = self.names()[0]
+        for value in (3.0, 4.5, 29.0, 35.0):
+            links, writes, rejects = self.count(name, "link"), self.count(name, "write"), self.count(name, "reject")
+            self.cli.climate_command(key=self.climates[name].key, target_temperature=value)
+            await asyncio.sleep(8)
+            dl, dw, dr = self.count(name, "link") - links, self.count(name, "write") - writes, self.count(name, "reject") - rejects
+            verdict = "OK" if dr == 1 and dw == 0 and dl == 0 else "UNEXPECTED"
+            self.note(f"range: {name} {value:.1f} -> rejected {dr}, links {dl}, writes {dw}: {verdict}")
+            self.results.append(("range_ok", 1.0 if verdict == "OK" else 0.0))
+        shown = self.target(name)
+        self.note(f"range: {name} shows {shown} afterwards (baseline {self.baseline[name]})")
+
+    async def sc_burst(self):
+        # Ten commands to one thermostat within a second: only the last value may be written, in one
+        # transaction; the intermediate ones must never reach the eTRV.
+        for r in range(self.args.repeat):
+            name = self.names()[r % len(self.names())]
+            await self.avoid_automation()
+            links, writes = self.count(name, "link"), self.count(name, "write")
+            # + - + - ... : every command is a real change; the last one (-) differs from the one before
+            values = [self.moved(name, +1 if i % 2 == 0 else -1) for i in range(10)]
+            cmds = []
+            for v in values:
+                cmds.append(await self.send(name, v, "write", "burst"))
+                await asyncio.sleep(0.1)
+            last = cmds[-1]
+            await self.wait([last])
+            await asyncio.sleep(3)
+            written = [v for c in cmds for v in c.written]
+            dl, dw = self.count(name, "link") - links, self.count(name, "write") - writes
+            ok = (last.rel("delivered") is not None and not last.no_link and not last.superseded and written
+                  and all(abs(v - values[-1]) < 0.01 for v in written))
+            self.note(f"burst: {name} 10 commands -> links {dl}, writes {dw}, values written {written}: {'OK' if ok else 'UNEXPECTED'}")
+            self.results.append(("burst_ok", 1.0 if ok else 0.0))
+            c = await self.send(name, self.baseline[name], "write", "burst: restore")
+            await self.wait([c])
+
+    async def sc_soak(self):
+        # Long run for leaks and rare failures: read-only links to every thermostat, continuously (a
+        # poke as soon as its last link is older than FRESH_READ_MS), and every --soak-write-every
+        # minutes a write and its restore on one thermostat (in turn), clear of the HA minute.
+        t_end = now() + self.args.soak_minutes * 60
+        next_write = now() + 120
+        wi = 0
+        inflight = {}
+        while now() < t_end:
+            if not self.connected.is_set():
+                await asyncio.wait_for(self.connected.wait(), timeout=900)
+            for n, c in list(inflight.items()):
+                if c.done.is_set():
+                    self.results.append(c)
+                    del inflight[n]
+            if now() >= next_write and not inflight:
+                await self.avoid_automation()
+                n = self.names()[wi % len(self.names())]
+                wi += 1
+                c = await self.send(n, self.moved(n, +1), "write", "soak write")
+                await self.wait([c])
+                c = await self.send(n, self.baseline[n], "write", "soak restore")
+                await self.wait([c])
+                next_write = now() + self.args.soak_write_every * 60
+                continue
+            if now() < next_write - 20:
+                for n in self.names():
+                    if n not in inflight and now() - self.last_link_end.get(n, 0.0) > 62:
+                        inflight[n] = await self.send(n, self.target(n), "poke", "soak read")
+            await asyncio.sleep(1)
+        await self.wait([c for c in inflight.values() if not c.done.is_set()])
+
     async def wait_stale(self):
         # Every eTRV's last read must be older than FRESH_READ_MS (60 s), so that a re-sent set
         # point really opens a (read-only) link; Home Assistant's own writes also refresh it.
@@ -566,6 +697,9 @@ class Runner:
             key = c.scenario
             groups.setdefault(key, []).append(c)
         for key, items in groups.items():
+            if key in ("reboot_pending_delivered", "range_ok", "burst_ok"):
+                self.note(f"{key:24s} {int(sum(items))} of {len(items)} passed")
+                continue
             if key == "double_first_written":
                 self.note(f"{key:24s} {int(sum(items))} of {len(items)} first values were written before being superseded")
                 continue
@@ -660,6 +794,8 @@ if __name__ == "__main__":
     p.add_argument("--timeout", type=float, default=600.0)
     p.add_argument("--gap", type=float, default=5.0, help="seconds between operations")
     p.add_argument("--txab-minutes", type=float, default=8.0, help="minutes per TX power level (scenario txab)")
+    p.add_argument("--soak-minutes", type=float, default=240.0, help="duration of scenario soak")
+    p.add_argument("--soak-write-every", type=float, default=10.0, help="minutes between the write pairs of scenario soak")
     p.add_argument("--level", type=int, default=6, help="API log level (6 = verbose)")
     p.add_argument("--no-avoid-automation", dest="avoid_automation", action="store_false")
     asyncio.run(main(p.parse_args()))

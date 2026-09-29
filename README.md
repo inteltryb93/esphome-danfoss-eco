@@ -221,6 +221,11 @@ a running vacation or pause is never overwritten by accident. Like the app, the 
 writes a set point while the eTRV is paused (switch to HEAT first). Vacations are planned in the
 Danfoss app; the component shows them but does not create them.
 
+What the eTRV does with the set point when the mode changes (measured): leaving a pause (OFF ->
+HEAT) brings back the manual set point it had before the pause; leaving the schedule (AUTO -> HEAT)
+keeps the set point the schedule had at that moment (e.g. 17 C, not the manual value from before).
+An automation that switches AUTO -> HEAT should therefore also send the set point it wants.
+
 Error codes
 -----------
 

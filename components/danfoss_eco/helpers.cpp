@@ -135,6 +135,62 @@ namespace esphome
             return true;
         }
 
+        string sanitize_utf8(const string &in)
+        {
+            string out;
+            out.reserve(in.size());
+            const size_t n = in.size();
+            size_t i = 0;
+            while (i < n)
+            {
+                const uint8_t c = (uint8_t)in[i];
+                size_t len;
+                uint32_t min_cp;
+                if (c < 0x80)
+                {
+                    out.push_back((char)c);
+                    i++;
+                    continue;
+                }
+                else if ((c & 0xE0) == 0xC0)
+                    len = 2, min_cp = 0x80;
+                else if ((c & 0xF0) == 0xE0)
+                    len = 3, min_cp = 0x800;
+                else if ((c & 0xF8) == 0xF0)
+                    len = 4, min_cp = 0x10000;
+                else
+                {
+                    out.push_back('?'); // stray continuation byte or 0xF8..0xFF
+                    i++;
+                    continue;
+                }
+                bool ok = true;
+                uint32_t cp = c & (0xFF >> (len + 1));
+                size_t k = 1;
+                for (; k < len && i + k < n; k++)
+                {
+                    const uint8_t cc = (uint8_t)in[i + k];
+                    if ((cc & 0xC0) != 0x80)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    cp = (cp << 6) | (cc & 0x3F);
+                }
+                if (ok && k < len)
+                    break; // incomplete sequence at the end: drop it
+                if (!ok || cp < min_cp || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+                {
+                    out.push_back('?');
+                    i++;
+                    continue;
+                }
+                out.append(in, i, len);
+                i += len;
+            }
+            return out;
+        }
+
         void copy_address(uint64_t mac, esp_bd_addr_t bd_addr)
         {
             bd_addr[0] = (mac >> 40) & 0xFF;

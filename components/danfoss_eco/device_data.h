@@ -387,6 +387,7 @@ namespace esphome
                     const uint8_t c = this->raw_[i];
                     this->name.push_back((c < 0x20 || c == 0x7F) ? ' ' : (char)c);
                 }
+                this->name = sanitize_utf8(this->name);
                 const size_t first = this->name.find_first_not_of(' ');
                 const size_t last = this->name.find_last_not_of(' ');
                 this->name = first == string::npos ? string() : this->name.substr(first, last - first + 1);

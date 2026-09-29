@@ -41,6 +41,10 @@ namespace esphome
     // that is already waiting for the radio, see loop()); only an eTRV that fails more often than
     // that (most likely out of reach: battery removed, moved away) gets the back-off ladder.
     static constexpr uint8_t QUICK_OPEN_RETRIES = 6;
+    // Handles that a discovery read from the eTRV itself explain a rejected PIN / request only as a
+    // wrong pin_code for this long; after that a rejection triggers one rediscovery again (an eTRV
+    // firmware update may have changed the layout). Bounds a wrong pin_code to one discovery a day.
+    static constexpr uint32_t HANDLES_TRUST_MS = 24UL * 3600UL * 1000UL;
     // Slow phase (after retry_window): every 5 min, after one more hour every 15 min. A failed open
     // costs the eTRV nothing but blocks the other thermostats for 20 s: 6.7 % resp. 2.2 % airtime.
     static constexpr uint32_t SLOW_RETRY_MS = 300000;
@@ -170,6 +174,28 @@ namespace esphome
       return false;
     }
 
+    // Another eTRV has been due for its next connection attempt for longer than this one.
+    bool Device::older_sibling_due_() const
+    {
+      for (auto *d : all_devices())
+      {
+        if (d != this && d->want_link_ && d->due_waiting_ && d->parent()->state() == ClientState::IDLE &&
+            (int32_t)(d->due_since_ms_ - this->due_since_ms_) < 0)
+          return true;
+      }
+      return false;
+    }
+
+    bool Device::handles_trusted_() const
+    {
+      return this->handles_from_device_ && (millis() - this->handles_from_device_ms_) < HANDLES_TRUST_MS;
+    }
+
+    bool Device::auto_connect_ok_() const
+    {
+      return this->handles_verified_ && !this->gatt_cache_clean_pending_ && this->xxtea->status() == XXTEA_STATUS_SUCCESS;
+    }
+
     uint32_t Device::link_age_ms_() const
     {
       return this->link_up_ ? (millis() - this->link_started_ms_) : 0;
@@ -261,9 +287,10 @@ namespace esphome
         ESP_LOGCONFIG(TAG, "  eTRV firmware: %s", this->p_info[INFO_FIRMWARE]->value().c_str());
     }
 
-    void Device::setup()
+    void Device::create_properties_()
     {
-      shared_ptr<MyComponent> sp_this(this);
+      // Non-owning: the properties keep a pointer to their component, which ESPHome owns (never delete it).
+      shared_ptr<MyComponent> sp_this(this, [](MyComponent *) {});
 
       this->p_pin = make_shared<WritableProperty>(sp_this, xxtea, SERVICE_SETTINGS, CHARACTERISTIC_PIN);
       this->p_battery = make_shared<BatteryProperty>(sp_this, xxtea);
@@ -288,6 +315,10 @@ namespace esphome
         this->properties.insert(p);
       for (auto &p : this->p_info)
         this->properties.insert(p);
+    }
+
+    void Device::setup()
+    {
       // Informational values are read once after boot, on the first link that has done its work.
       this->info_pending_ = this->info_wanted_mask_();
       // pretend, we have already discovered the device
@@ -299,9 +330,13 @@ namespace esphome
       if (restore.has_value())
         restore->apply(this);
 
-      // Requests that were not delivered before the restart (keyed by the eTRV's MAC address).
+      // Requests that were not delivered before the restart (keyed by the eTRV's MAC address). A
+      // command given before setup() (on_boot automation) is newer than those: keep it and store it.
       this->pending_pref_ = global_preferences->make_preference<PendingWrites>(fnv1_hash(std::string("danfoss_eco_pending__") + this->parent()->address_str()));
-      this->load_pending_();
+      if (this->has_writes_())
+        this->save_pending_();
+      else
+        this->load_pending_();
 
       if (restore.has_value() || this->has_writes_())
         this->publish_climate_state();
@@ -341,6 +376,11 @@ namespace esphome
           this->parent()->set_enabled(false);
         }
       }
+
+      // The cached device state counts as fresh (control() de-duplication) for FRESH_READ_MS only;
+      // a flag instead of the timestamp alone keeps that right across the 49.7-day millis() wrap.
+      if (this->read_recent_ && (now - this->last_read_ms_) >= FRESH_READ_MS)
+        this->read_recent_ = false;
 
       const auto pst = this->parent()->state();
       // Restart the promotion-fallback timer on every entry into DISCOVERED (ours or auto_connect's).
@@ -435,12 +475,18 @@ namespace esphome
 
         if (!this->link_up_)
         {
-          if (pst == ClientState::IDLE)
+          if (pst == ClientState::IDLE && (int32_t)(now - this->next_connect_ms_) >= 0)
           {
-            // After a failed open a sibling that is already waiting for the radio goes first: the
-            // tracker promotes the first waiting client in its list, so without this the eTRVs early
-            // in the list would win every round while several of them keep failing (round robin).
-            if ((int32_t)(now - this->next_connect_ms_) >= 0 && !(this->opens_failed_in_row_ > 0 && this->sibling_waiting_()))
+            if (!this->due_waiting_)
+            {
+              this->due_waiting_ = true;
+              this->due_since_ms_ = now;
+            }
+            // After a failed open, whoever has waited longest goes first: a sibling already waiting
+            // for the tracker (DISCOVERED), or one that has been due for longer. The tracker promotes
+            // the first waiting client of its list, so without this the eTRVs early in the list
+            // would win every contest while several of them keep failing (first come, first served).
+            if (!(this->opens_failed_in_row_ > 0 && (this->sibling_waiting_() || this->older_sibling_due_())))
               this->try_connect_();
           }
           else if (pst == ClientState::DISCOVERED)
@@ -503,7 +549,7 @@ namespace esphome
       const uint32_t now = millis();
       // The cached device state may be up to one poll interval old (the eTRV schedule or the dial may
       // have changed it since), so it is only trusted for de-duplication when it was read just now.
-      const bool fresh = this->read_once_ && (now - this->last_read_ms_) < FRESH_READ_MS;
+      const bool fresh = this->read_recent_ && (now - this->last_read_ms_) < FRESH_READ_MS;
 
       if (call.get_target_temperature().has_value())
       {
@@ -527,6 +573,8 @@ namespace esphome
           if (!std::isnan(current) && std::fabs(current - new_temp) < 0.05f)
           {
             ESP_LOGD(TAG, "[%s] target temperature unchanged (%.1f C), skipping write", this->get_name().c_str(), new_temp);
+            if (this->pending_write_temperature_)
+              this->temperature_requested_ms_ = now; // re-requested: still wanted (TTL)
           }
           else
           {
@@ -560,6 +608,8 @@ namespace esphome
           if (known && current == new_mode)
           {
             ESP_LOGD(TAG, "[%s] mode unchanged (%d), skipping write", this->get_name().c_str(), (int)new_mode);
+            if (this->pending_write_settings_)
+              this->settings_requested_ms_ = now; // re-requested: still wanted (TTL)
           }
           else
           {
@@ -673,17 +723,27 @@ namespace esphome
       // cache. That is what we want after a reboot, but not when the layout looked wrong, nor for
       // onboarding (the secret key characteristic only exists while the pairing window is open):
       // then the stack's table for this eTRV is cleared first (no link is open at this point).
+      bool from_device = true;
+#ifdef CONFIG_BT_GATTC_CACHE_NVS_FLASH
+      from_device = false; // a discovery may be answered from the stack's persistent table
+#endif
       if (discover && (this->gatt_cache_clean_pending_ || this->xxtea->status() != XXTEA_STATUS_SUCCESS))
       {
         ESP_LOGD(TAG, "[%s] clearing the stack's cached service table before discovery", this->get_name().c_str());
         esp_ble_gattc_cache_clean(this->parent()->get_remote_bda());
         this->gatt_cache_clean_pending_ = false;
+        from_device = true;
       }
+      this->discovery_from_device_ = discover && from_device;
       this->parent()->set_connection_type(discover ? ConnectionType::V1 : ConnectionType::V3_WITH_CACHE);
 
       if (this->connect_attempts_ < 255)
         this->connect_attempts_++;
       this->connect_requested_ms_ = millis();
+      this->due_waiting_ = false;
+      // Should the client ever fall back to IDLE without an event, do not re-request on every loop
+      // pass (a failed attempt reschedules this anyway).
+      this->next_connect_ms_ = millis() + 1000;
       if (!this->parent()->enabled)
         this->parent()->set_enabled(true);
 
@@ -931,7 +991,7 @@ namespace esphome
       this->pending_time_sync_ = false;
       this->pending_e10_ack_ = false;
       const bool more = this->has_pending_();
-      this->teardown_link_(reason, more);
+      this->teardown_link_(reason, more && this->auto_connect_ok_());
       if (more)
       {
         this->want_link_ = true;
@@ -946,6 +1006,8 @@ namespace esphome
     void Device::teardown_link_(const char *reason, bool keep_enabled)
     {
       ESP_LOGD(TAG, "[%s] closing link (%s): age=%u ms inflight=%u keep_enabled=%d", this->get_name().c_str(), reason, (unsigned)this->link_age_ms_(), (unsigned)this->inflight_, (int)keep_enabled);
+      this->flush_climate_state_(); // whatever an interrupted read batch did get
+      this->due_waiting_ = false;
       this->inflight_ = 0;
       this->pin_inflight_ = false;
       this->batch_ = BATCH_NONE;
@@ -1165,6 +1227,12 @@ namespace esphome
           else
             this->parent()->set_enabled(false);
         }
+        else if (this->last_parent_state_ != ClientState::CONNECTING && this->last_parent_state_ != ClientState::DISCOVERED)
+        {
+          // A late open result for a client that had no attempt of ours outstanding (e.g. after a
+          // client-watchdog reset): not a failed attempt - it must not cut a longer back-off short.
+          ESP_LOGD(TAG, "[%s] late open result (status=%#04x) while the client was %s - ignored", this->get_name().c_str(), param->open.status, client_state_str(this->last_parent_state_));
+        }
         else
         {
           // Nothing usable was established (e.g. status 0x85 after the 20 s open timeout: the eTRV
@@ -1187,8 +1255,8 @@ namespace esphome
           else
           {
             const bool quick = this->opens_failed_in_row_ <= QUICK_OPEN_RETRIES;
-            if (!quick)
-              this->parent()->set_enabled(false);
+            if (!quick || !this->auto_connect_ok_())
+              this->parent()->set_enabled(false); // (a link that needs a discovery goes through try_connect_())
             if (this->retry_count_ == 0)
               this->retry_count_ = 1; // the open itself already took 20 s: the ladder starts at 15 s
             this->schedule_retry_(quick ? "open failed, client stays enabled for auto_connect" : "open failed again, client parked until the next attempt", quick);
@@ -1213,12 +1281,14 @@ namespace esphome
         ESP_LOGD(TAG, "[%s] %s, conn_id=%d, reason=%#04x, link_age=%u ms", this->get_name().c_str(), event == ESP_GATTC_CLOSE_EVT ? "close" : "disconnect", event == ESP_GATTC_CLOSE_EVT ? param->close.conn_id : param->disconnect.conn_id, reason, (unsigned)this->link_age_ms_());
         this->link_up_ = false;
         this->inflight_ = 0;
+        this->pin_inflight_ = false;
         this->batch_ = BATCH_NONE;
         this->fresh_read_this_link_ = false;
         this->clock_ok_this_link_ = false;
         this->wrote_settings_this_link_ = false;
         this->wrote_temperature_this_link_ = false;
         this->node_state = ClientState::IDLE;
+        this->flush_climate_state_();
         if (lost > 0 && info_only)
           ESP_LOGD(TAG, "[%s] link lost during optional work (reason=%#04x) - done again on a later link", this->get_name().c_str(), reason);
         else if (lost > 0)
@@ -1235,7 +1305,7 @@ namespace esphome
           // Unexpected loss in the middle of our work. The first time, stay enabled so the
           // tracker's auto_connect reconnects the moment the eTRV advertises again; from the
           // second loss on, park the client and back off (every link costs the eTRV battery).
-          if (this->links_this_txn_ >= 2)
+          if (this->links_this_txn_ >= 2 || !this->auto_connect_ok_())
             this->parent()->set_enabled(false);
           this->schedule_retry_("link lost mid-transaction");
         }
@@ -1264,6 +1334,12 @@ namespace esphome
           p->init_handle(this->parent());
 
         this->handles_verified_ = this->p_pin->has_handle() && this->p_battery->has_handle() && this->p_temperature->has_handle() && this->p_settings->has_handle() && this->p_errors->has_handle();
+        this->handles_from_device_ = this->handles_verified_ && this->discovery_from_device_;
+        if (this->handles_from_device_)
+          this->handles_from_device_ms_ = now;
+        // Links that auto_connect opens later need no discovery (try_connect_() sets it again anyway).
+        if (this->handles_verified_ && this->xxtea->status() == XXTEA_STATUS_SUCCESS)
+          this->parent()->set_connection_type(ConnectionType::V3_WITH_CACHE);
         if (!this->handles_verified_)
         {
           ESP_LOGE(TAG, "[%s] required characteristics not found (pin=%#04x battery=%#04x temperature=%#04x settings=%#04x errors=%#04x) - is this a Danfoss Eco?", this->get_name().c_str(), this->p_pin->handle, this->p_battery->handle, this->p_temperature->handle, this->p_settings->handle, this->p_errors->handle);
@@ -1318,8 +1394,10 @@ namespace esphome
       if (this->handles_verified_)
         ESP_LOGW(TAG, "[%s] %s - forgetting GATT handles, next link will rediscover services", this->get_name().c_str(), why);
       this->handles_verified_ = false;
+      this->handles_from_device_ = false;
       // ... from the eTRV itself, not from the stack's cached service table
       this->gatt_cache_clean_pending_ = true;
+      this->parent()->set_connection_type(ConnectionType::V1);
     }
 
     void Device::write_pin()
@@ -1356,8 +1434,10 @@ namespace esphome
         }
         else
         {
-          // the eTRV rejected it (wrong pin_code or wrong handle layout): rediscover, count it
-          this->invalidate_handles_("PIN write rejected");
+          // The eTRV rejected it: a wrong pin_code, or (with handles from a cached table) a changed
+          // layout - rediscover in that case only; count it either way.
+          if (!this->handles_trusted_())
+            this->invalidate_handles_("PIN write rejected");
           this->hard_error_("PIN rejected - check pin_code");
         }
         return;
@@ -1399,7 +1479,8 @@ namespace esphome
         }
         else
         {
-          this->invalidate_handles_("read rejected by the device");
+          if (!this->handles_trusted_())
+            this->invalidate_handles_("read rejected by the device");
           this->batch_hard_errors_++;
         }
       }
@@ -1423,7 +1504,10 @@ namespace esphome
         }
         else
         {
-          this->invalidate_handles_("unexpected value length");
+          // the 1-byte error code comes from the right characteristic: not a layout problem
+          const bool error_code = param.value_len == 1 && prop->expected_length() > 1;
+          if (!error_code && !this->handles_trusted_())
+            this->invalidate_handles_("unexpected value length");
           this->batch_hard_errors_++;
         }
       }
@@ -1448,8 +1532,17 @@ namespace esphome
         this->on_batch_complete_();
     }
 
+    void Device::flush_climate_state_()
+    {
+      if (!this->climate_changed_)
+        return;
+      this->climate_changed_ = false;
+      this->publish_climate_state();
+    }
+
     void Device::on_batch_complete_()
     {
+      this->flush_climate_state_(); // one publish for the whole read (set point + mode together)
       const uint8_t batch = this->batch_;
       const uint8_t hard = this->batch_hard_errors_;
       const uint8_t transient = this->batch_link_errors_;
@@ -1486,6 +1579,7 @@ namespace esphome
         this->fresh_read_this_link_ = true;
         this->read_once_ = true;
         this->last_read_ms_ = millis();
+        this->read_recent_ = true;
         // a complete, plausible read: the device is reachable and the configuration is right
         this->consecutive_hard_errors_ = 0;
         this->publish_connection_(true);
@@ -1635,6 +1729,8 @@ namespace esphome
         this->reported_error_flags_ = e->flags;
         this->reported_clock_lost_ = lost;
       }
+      if (problems.size() > 255) // Home Assistant's limit for a state
+        problems = problems.substr(0, 252) + "...";
       if (this->problems_detail_ != nullptr)
         this->problems_detail_->publish_state(problems);
     }
@@ -1858,7 +1954,8 @@ namespace esphome
         this->save_pending_();
         this->publish_climate_state();
         this->pending_read_ = true;
-        this->invalidate_handles_("write rejected by the device");
+        if (!this->handles_trusted_())
+          this->invalidate_handles_("write rejected by the device");
         this->hard_error_("write rejected by the device");
       }
     }
