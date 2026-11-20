@@ -3,7 +3,7 @@
 esphome:
   name: etrv2wifi
   comment: Extend Danfoss ECO eTRV BLE range over WiFi with ESPHome
-  min_version: 2026.9.0
+  min_version: 2026.11.0
 
 esp32:
   board: esp32dev

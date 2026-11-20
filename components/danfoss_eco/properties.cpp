@@ -15,16 +15,16 @@ namespace esphome
             // ESPBTUUID::to_string() is deprecated (removed in ESPHome 2026.8.0). Use to_str(buf),
             // which writes into a caller-provided char[UUID_STR_LEN] buffer and returns it.
             char svc_buf[UUID_STR_LEN], chr_buf[UUID_STR_LEN];
-            ESP_LOGV(TAG, "[%s] resolving handler for service=%s, characteristic=%s", this->component_->get_name().c_str(), this->service_uuid.to_str(svc_buf), this->characteristic_uuid.to_str(chr_buf));
+            ESP_LOGV(TAG, "[%s] resolving handler for service=%s, characteristic=%s", this->component_->entity_name(), this->service_uuid.to_str(svc_buf), this->characteristic_uuid.to_str(chr_buf));
             this->handle = INVALID_HANDLE;
             auto chr = client->get_characteristic(this->service_uuid, this->characteristic_uuid);
             if (chr == nullptr)
             {
                 char buf[UUID_STR_LEN];
                 if (this->essential())
-                    ESP_LOGW(TAG, "[%s] characteristic uuid=%s not found", this->component_->get_name().c_str(), this->characteristic_uuid.to_str(buf));
+                    ESP_LOGW(TAG, "[%s] characteristic uuid=%s not found", this->component_->entity_name(), this->characteristic_uuid.to_str(buf));
                 else
-                    ESP_LOGD(TAG, "[%s] optional characteristic uuid=%s not present", this->component_->get_name().c_str(), this->characteristic_uuid.to_str(buf));
+                    ESP_LOGD(TAG, "[%s] optional characteristic uuid=%s not present", this->component_->entity_name(), this->characteristic_uuid.to_str(buf));
                 return false;
             }
 
@@ -36,16 +36,16 @@ namespace esphome
         {
             if (!this->has_handle())
             {
-                ESP_LOGW(TAG, "[%s] read_request: characteristic handle not resolved, skipping", this->component_->get_name().c_str());
+                ESP_LOGW(TAG, "[%s] read_request: characteristic handle not resolved, skipping", this->component_->entity_name());
                 return false;
             }
-            ESP_LOGV(TAG, "[%s] read_request: handle=%#04x conn_id=%d", this->component_->get_name().c_str(), this->handle, client->get_conn_id());
+            ESP_LOGV(TAG, "[%s] read_request: handle=%#04x conn_id=%d", this->component_->entity_name(), this->handle, client->get_conn_id());
             auto status = esp_ble_gattc_read_char(client->get_gattc_if(),
                                                   client->get_conn_id(),
                                                   this->handle,
                                                   ESP_GATT_AUTH_REQ_NONE);
             if (status != ESP_OK)
-                ESP_LOGW(TAG, "[%s] esp_ble_gattc_read_char failed, handle=%#04x, status=%01x", this->component_->get_name().c_str(), this->handle, status);
+                ESP_LOGW(TAG, "[%s] esp_ble_gattc_read_char failed, handle=%#04x, status=%01x", this->component_->entity_name(), this->handle, status);
 
             return status == ESP_OK;
         }
@@ -54,10 +54,10 @@ namespace esphome
         {
             if (!this->has_handle())
             {
-                ESP_LOGW(TAG, "[%s] write_request: characteristic handle not resolved, skipping", this->component_->get_name().c_str());
+                ESP_LOGW(TAG, "[%s] write_request: characteristic handle not resolved, skipping", this->component_->entity_name());
                 return false;
             }
-            ESP_LOGV(TAG, "[%s] write_request: handle=%#04x, data=%s", this->component_->get_name().c_str(), this->handle, log_data ? format_hex_pretty(data, data_len).c_str() : "(not logged)");
+            ESP_LOGV(TAG, "[%s] write_request: handle=%#04x, data=%s", this->component_->entity_name(), this->handle, log_data ? HexDump(data, data_len).c_str() : "(not logged)");
 
             auto status = esp_ble_gattc_write_char(client->get_gattc_if(),
                                                    client->get_conn_id(),
@@ -67,7 +67,7 @@ namespace esphome
                                                    ESP_GATT_WRITE_TYPE_RSP,
                                                    ESP_GATT_AUTH_REQ_NONE);
             if (status != ESP_OK)
-                ESP_LOGW(TAG, "[%s] esp_ble_gattc_write_char failed, handle=%#04x, status=%01x", this->component_->get_name().c_str(), this->handle, status);
+                ESP_LOGW(TAG, "[%s] esp_ble_gattc_write_char failed, handle=%#04x, status=%01x", this->component_->entity_name(), this->handle, status);
 
             return status == ESP_OK;
         }
@@ -91,11 +91,11 @@ namespace esphome
             {
                 // Not a protocol error (it must never make a transaction give up and drop a requested
                 // set point): the level is simply unknown this time.
-                ESP_LOGW(TAG, "[%s] battery level %u %% out of range - shown as unknown", this->component_->get_name().c_str(), battery_level);
+                ESP_LOGW(TAG, "[%s] battery level %u %% out of range - shown as unknown", this->component_->entity_name(), battery_level);
                 publish_sensor(this->component_->battery_level(), NAN);
                 return true;
             }
-            ESP_LOGD(TAG, "[%s] battery level: %d %%", this->component_->get_name().c_str(), battery_level);
+            ESP_LOGD(TAG, "[%s] battery level: %d %%", this->component_->entity_name(), battery_level);
             publish_sensor(this->component_->battery_level(), battery_level);
             return true;
         }
@@ -104,18 +104,18 @@ namespace esphome
 
         bool TemperatureProperty::update_state(uint8_t *value, uint16_t value_len)
         {
-            const char *name = this->component_->get_name().c_str();
-            ESP_LOGV(TAG, "[%s] TEMP RAW BLE[%d]: %s", name, value_len, format_hex_pretty(value, value_len).c_str());
+            const char *name = this->component_->entity_name();
+            ESP_LOGV(TAG, "[%s] TEMP RAW BLE[%d]: %s", name, value_len, HexDump(value, value_len).c_str());
 
             auto t_data = new TemperatureData(this->xxtea_, value, value_len);
             if (!t_data->valid)
             {
-                ESP_LOGE(TAG, "[%s] temperature: %s (decrypted %s)", name, WRONG_KEY_HINT, format_hex_pretty(t_data->raw_, t_data->length).c_str());
+                ESP_LOGE(TAG, "[%s] temperature: %s (decrypted %s)", name, WRONG_KEY_HINT, HexDump(t_data->raw_, t_data->length).c_str());
                 delete t_data;
                 return false;
             }
             this->data.reset(t_data);
-            ESP_LOGV(TAG, "[%s] TEMP DECRYPTED: %s", name, format_hex_pretty(t_data->raw_, t_data->length).c_str());
+            ESP_LOGV(TAG, "[%s] TEMP DECRYPTED: %s", name, HexDump(t_data->raw_, t_data->length).c_str());
             ESP_LOGD(TAG, "[%s] TEMP PROCESSED: room=%.1f target=%.1f", name, t_data->room_temperature, t_data->target_temperature);
 
             publish_sensor(this->component_->temperature(), t_data->room_temperature);
@@ -128,21 +128,21 @@ namespace esphome
 
         bool SettingsProperty::update_state(uint8_t *value, uint16_t value_len)
         {
-            const char *name = this->component_->get_name().c_str();
-            ESP_LOGV(TAG, "[%s] SETTINGS RAW BLE[%d]: %s", name, value_len, format_hex_pretty(value, value_len).c_str());
+            const char *name = this->component_->entity_name();
+            ESP_LOGV(TAG, "[%s] SETTINGS RAW BLE[%d]: %s", name, value_len, HexDump(value, value_len).c_str());
 
             auto s_data = new SettingsData(this->xxtea_, value, value_len);
             if (!s_data->valid)
             {
                 // Never keep (and therefore never write back) a settings block that does not look like
                 // a real one: writing garbage here is what "resets the valve" (upstream issue #11).
-                ESP_LOGE(TAG, "[%s] settings: %s (decrypted %s)", name, WRONG_KEY_HINT, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+                ESP_LOGE(TAG, "[%s] settings: %s (decrypted %s)", name, WRONG_KEY_HINT, HexDump(s_data->raw_, s_data->length).c_str());
                 delete s_data;
                 return false;
             }
             this->data.reset(s_data);
 
-            ESP_LOGV(TAG, "[%s] SETTINGS DECRYPTED: %s", name, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+            ESP_LOGV(TAG, "[%s] SETTINGS DECRYPTED: %s", name, HexDump(s_data->raw_, s_data->length).c_str());
             ESP_LOGD(TAG, "[%s] SETTINGS PROCESSED: mode=%s(%u) min=%.1f max=%.1f frost=%.1f", name, SettingsData::mode_str(s_data->raw_mode), (unsigned)s_data->raw_mode, s_data->temperature_min, s_data->temperature_max, s_data->frost_protection_temperature);
             ESP_LOGV(TAG, "[%s] adaptable_regulation=%d daylight_saving=%d vertical_installation=%d display_flip=%d slow_regulation=%d calibrated=%d valve_installed=%d lock_control=%d", name, s_data->get_adaptable_regulation(), s_data->get_daylight_saving(), s_data->get_vertical_installation(), s_data->get_display_flip(), s_data->get_slow_regulation(), s_data->get_calibrated(), s_data->get_valve_installed(), s_data->get_lock_control());
             ESP_LOGV(TAG, "[%s] vacation: temperature=%.1f from=%d to=%d", name, s_data->vacation_temperature, (int)s_data->vacation_from, (int)s_data->vacation_to);
@@ -174,7 +174,7 @@ namespace esphome
 
         bool ErrorsProperty::update_state(uint8_t *value, uint16_t value_len)
         {
-            const char *name = this->component_->get_name().c_str();
+            const char *name = this->component_->entity_name();
             auto e_data = new ErrorsData(this->xxtea_, value, value_len);
             if (!e_data->valid)
             {
@@ -184,7 +184,7 @@ namespace esphome
             }
             this->data.reset(e_data);
 
-            ESP_LOGV(TAG, "[%s] ERRORS DECRYPTED: %s", name, format_hex_pretty(e_data->raw_, e_data->length).c_str());
+            ESP_LOGV(TAG, "[%s] ERRORS DECRYPTED: %s", name, HexDump(e_data->raw_, e_data->length).c_str());
             ESP_LOGD(TAG, "[%s] errors: flags=%#06x E9 valve=%d E10 time=%d E14 low battery=%d E15 very low battery=%d", name, e_data->flags, e_data->E9_VALVE_DOES_NOT_CLOSE, e_data->E10_INVALID_TIME, e_data->E14_LOW_BATTERY, e_data->E15_VERY_LOW_BATTERY);
             // published by the Device once the whole state (including the clock) has been read
             return true;
@@ -192,11 +192,11 @@ namespace esphome
 
         bool TimeProperty::update_state(uint8_t *value, uint16_t value_len)
         {
-            const char *name = this->component_->get_name().c_str();
+            const char *name = this->component_->entity_name();
             auto t_data = new TimeData(this->xxtea_, value, value_len);
             if (!t_data->valid)
             {
-                ESP_LOGW(TAG, "[%s] time: implausible (decrypted %s)", name, format_hex_pretty(t_data->raw_, t_data->length).c_str());
+                ESP_LOGW(TAG, "[%s] time: implausible (decrypted %s)", name, HexDump(t_data->raw_, t_data->length).c_str());
                 delete t_data;
                 return false;
             }
@@ -209,7 +209,7 @@ namespace esphome
         {
             if (this->xxtea_->status() != XXTEA_STATUS_NOT_INITIALIZED)
             {
-                ESP_LOGV(TAG, "[%s] xxtea is initialized, will not request a read of secret_key", this->component_->get_name().c_str());
+                ESP_LOGV(TAG, "[%s] xxtea is initialized, will not request a read of secret_key", this->component_->entity_name());
                 this->handle = INVALID_HANDLE; // never leave a stale handle that a read response could match
                 return true;
             }
@@ -221,7 +221,7 @@ namespace esphome
                 return true;
             }
 
-            ESP_LOGW(TAG, "[%s] Danfoss Eco hardware button was not pressed, unable to read the secret key", this->component_->get_name().c_str());
+            ESP_LOGW(TAG, "[%s] Danfoss Eco hardware button was not pressed, unable to read the secret key", this->component_->entity_name());
             this->handle = INVALID_HANDLE;
             return false;
         }
@@ -230,15 +230,15 @@ namespace esphome
         {
             if (value_len != SECRET_KEY_LENGTH)
             {
-                ESP_LOGE(TAG, "[%s] Unexpected secret_key length: %d", this->component_->get_name().c_str(), value_len);
+                ESP_LOGE(TAG, "[%s] Unexpected secret_key length: %d", this->component_->entity_name(), value_len);
                 return false;
             }
 
             char key_str[SECRET_KEY_LENGTH * 2 + 1];
             encode_hex(value, value_len, key_str);
 
-            ESP_LOGI(TAG, "[%s] Consider adding below line to your danfoss_eco config:", this->component_->get_name().c_str());
-            ESP_LOGI(TAG, "[%s] secret_key: %s", this->component_->get_name().c_str(), key_str);
+            ESP_LOGI(TAG, "[%s] Consider adding below line to your danfoss_eco config:", this->component_->entity_name());
+            ESP_LOGI(TAG, "[%s] secret_key: %s", this->component_->entity_name(), key_str);
             this->component_->set_secret_key(value, true);
             return true;
         }
@@ -253,7 +253,7 @@ namespace esphome
             const size_t first = text.find_first_not_of(' ');
             const size_t last = text.find_last_not_of(' ');
             this->value_ = first == string::npos ? string() : text.substr(first, last - first + 1);
-            ESP_LOGD(TAG, "[%s] %s: %s", this->component_->get_name().c_str(), this->label_, this->value_.c_str());
+            ESP_LOGD(TAG, "[%s] %s: %s", this->component_->entity_name(), this->label_, this->value_.c_str());
             auto *s = this->component_->info_sensor(this->field_);
             if (s != nullptr)
                 s->publish_state(this->value_);
@@ -265,11 +265,11 @@ namespace esphome
             auto n_data = new NameData(this->xxtea_, value, value_len);
             if (!n_data->valid)
             {
-                ESP_LOGW(TAG, "[%s] device name: could not decrypt (%u bytes)", this->component_->get_name().c_str(), (unsigned)value_len);
+                ESP_LOGW(TAG, "[%s] device name: could not decrypt (%u bytes)", this->component_->entity_name(), (unsigned)value_len);
                 delete n_data;
                 return false;
             }
-            ESP_LOGD(TAG, "[%s] device name: '%s'", this->component_->get_name().c_str(), n_data->name.c_str());
+            ESP_LOGD(TAG, "[%s] device name: '%s'", this->component_->entity_name(), n_data->name.c_str());
             if (this->component_->thermostat_name() != nullptr)
                 this->component_->thermostat_name()->publish_state(n_data->name);
             this->data.reset(n_data);
@@ -282,11 +282,11 @@ namespace esphome
             auto p_data = new PinSettingsData(this->xxtea_, value, value_len);
             if (!p_data->valid)
             {
-                ESP_LOGW(TAG, "[%s] PIN settings: could not decrypt", this->component_->get_name().c_str());
+                ESP_LOGW(TAG, "[%s] PIN settings: could not decrypt", this->component_->entity_name());
                 delete p_data;
                 return false;
             }
-            ESP_LOGD(TAG, "[%s] PIN protection: %s", this->component_->get_name().c_str(), p_data->pin_enabled ? "on" : "off");
+            ESP_LOGD(TAG, "[%s] PIN protection: %s", this->component_->entity_name(), p_data->pin_enabled ? "on" : "off");
             publish_binary(this->component_->pin_protection(), p_data->pin_enabled);
             this->data.reset(p_data);
             return true;
@@ -297,11 +297,11 @@ namespace esphome
             auto s_data = new SchedulePartData(this->xxtea_, this->part_, value, value_len);
             if (!s_data->valid)
             {
-                ESP_LOGW(TAG, "[%s] schedule part %u: implausible (decrypted %s)", this->component_->get_name().c_str(), (unsigned)this->part_ + 1, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+                ESP_LOGW(TAG, "[%s] schedule part %u: implausible (decrypted %s)", this->component_->entity_name(), (unsigned)this->part_ + 1, HexDump(s_data->raw_, s_data->length).c_str());
                 delete s_data;
                 return false;
             }
-            ESP_LOGV(TAG, "[%s] SCHEDULE %u DECRYPTED: %s", this->component_->get_name().c_str(), (unsigned)this->part_ + 1, format_hex_pretty(s_data->raw_, s_data->length).c_str());
+            ESP_LOGV(TAG, "[%s] SCHEDULE %u DECRYPTED: %s", this->component_->entity_name(), (unsigned)this->part_ + 1, HexDump(s_data->raw_, s_data->length).c_str());
             this->data.reset(s_data);
             return true;
         }

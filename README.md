@@ -7,7 +7,7 @@ Danfoss Eco eTRV over Bluetooth Low Energy from an ESP32.
 This is a **merge of the [`ryssel`](https://github.com/ryssel/esphome-danfoss-eco) and
 [`ckoca`](https://github.com/ckoca/esphome-danfoss-eco) forks** of
 [`dmitry-cherkas/esphome-danfoss-eco`](https://github.com/dmitry-cherkas/esphome-danfoss-eco),
-updated to build on **ESPHome 2026.9.0** (also tested with 2026.10.0-dev) with the **ESP-IDF** framework. See
+updated to build on **ESPHome 2026.11.0** (or newer) with the **ESP-IDF** framework. See
 [`MERGE_NOTES.md`](MERGE_NOTES.md) for the detailed, per-file merge rationale.
 
 This component supports:
@@ -36,8 +36,8 @@ It uses the ESP32 BLE peripheral, so a ``ble_client`` configuration must be prov
 >   framework:
 >     type: esp-idf
 > ```
-> The component compiles warning-free with ESPHome 2026.9.0 and 2026.10.0-dev on the default
-> ESP-IDF (5.5.5); the hardware tests (4 eTRVs, ESP32-C3) ran on ESPHome 2026.9.0 / ESP-IDF 5.5.5.
+> The component needs ESPHome 2026.11.0 or newer and compiles warning-free with it on the default
+> ESP-IDF (5.5.6); the hardware tests (4 eTRVs, ESP32-C3) ran on ESPHome 2026.9.0 / ESP-IDF 5.5.5.
 
 Onboarding your device
 ------------------------

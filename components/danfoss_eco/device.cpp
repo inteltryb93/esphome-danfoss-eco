@@ -214,7 +214,7 @@ namespace esphome
     void Device::log_link_(const char *where, int level)
     {
 #define DANFOSS_LINK_FMT "[%s] %s: parent=%s node=%s enabled=%d conn_id=%d link_up=%d age=%u ms inflight=%u batch=%s pending[read=%d temp=%d settings=%d key=%d time=%d e10=%d info=%#05x] want_link=%d slow=%d links=%u opens_failed=%u requests=%u hard_errors=%u"
-#define DANFOSS_LINK_ARGS this->get_name().c_str(), where, client_state_str(this->parent()->state()), client_state_str(this->node_state), (int)this->parent()->enabled, (int)this->parent()->get_conn_id(), (int)this->link_up_, (unsigned)this->link_age_ms_(), (unsigned)this->inflight_, batch_str(this->batch_), (int)this->pending_read_, (int)this->pending_write_temperature_, (int)this->pending_write_settings_, (int)this->pending_secret_key_, (int)this->pending_time_sync_, (int)this->pending_e10_ack_, (unsigned)this->info_pending_, (int)this->want_link_, (int)this->slow_phase_, (unsigned)this->links_this_txn_, (unsigned)this->open_failures_, (unsigned)this->connect_attempts_, (unsigned)this->consecutive_hard_errors_
+#define DANFOSS_LINK_ARGS this->entity_name(), where, client_state_str(this->parent()->state()), client_state_str(this->node_state), (int)this->parent()->enabled, (int)this->parent()->get_conn_id(), (int)this->link_up_, (unsigned)this->link_age_ms_(), (unsigned)this->inflight_, batch_str(this->batch_), (int)this->pending_read_, (int)this->pending_write_temperature_, (int)this->pending_write_settings_, (int)this->pending_secret_key_, (int)this->pending_time_sync_, (int)this->pending_e10_ack_, (unsigned)this->info_pending_, (int)this->want_link_, (int)this->slow_phase_, (unsigned)this->links_this_txn_, (unsigned)this->open_failures_, (unsigned)this->connect_attempts_, (unsigned)this->consecutive_hard_errors_
       switch (level)
       {
       case ESPHOME_LOG_LEVEL_ERROR:
@@ -355,7 +355,7 @@ namespace esphome
       // change, so log the transitions to get a complete timeline.
       if (this->node_state != this->last_node_state_)
       {
-        ESP_LOGV(TAG, "[%s] node_state %s -> %s (parent=%s link_age=%u ms inflight=%u)", this->get_name().c_str(), client_state_str(this->last_node_state_), client_state_str(this->node_state), client_state_str(this->parent()->state()), (unsigned)this->link_age_ms_(), (unsigned)this->inflight_);
+        ESP_LOGV(TAG, "[%s] node_state %s -> %s (parent=%s link_age=%u ms inflight=%u)", this->entity_name(), client_state_str(this->last_node_state_), client_state_str(this->node_state), client_state_str(this->parent()->state()), (unsigned)this->link_age_ms_(), (unsigned)this->inflight_);
         this->last_node_state_ = this->node_state;
       }
       if (now - this->last_status_log_ms_ >= STATUS_LOG_INTERVAL_MS)
@@ -372,7 +372,7 @@ namespace esphome
         this->boot_disable_done_ = true;
         if (!this->want_link_ && this->parent()->enabled)
         {
-          ESP_LOGD(TAG, "[%s] boot: parking ble_client until the first poll", this->get_name().c_str());
+          ESP_LOGD(TAG, "[%s] boot: parking ble_client until the first poll", this->entity_name());
           this->parent()->set_enabled(false);
         }
       }
@@ -467,7 +467,7 @@ namespace esphome
             this->slow_phase_ = true;
             this->failing_since_ms_ = now;
             this->publish_connection_(false);
-            ESP_LOGW(TAG, "[%s] not reachable for %u s - keeping the request, retrying every %u s", this->get_name().c_str(), (unsigned)((now - this->txn_started_ms_) / 1000), (unsigned)(SLOW_RETRY_MS / 1000));
+            ESP_LOGW(TAG, "[%s] not reachable for %u s - keeping the request, retrying every %u s", this->entity_name(), (unsigned)((now - this->txn_started_ms_) / 1000), (unsigned)(SLOW_RETRY_MS / 1000));
             if ((int32_t)(this->next_connect_ms_ - now) > (int32_t)SLOW_RETRY_MS)
               this->next_connect_ms_ = now + SLOW_RETRY_MS;
           }
@@ -499,7 +499,7 @@ namespace esphome
             }
             else if ((now - this->connect_requested_ms_) > PROMOTION_FALLBACK_MS)
             {
-              ESP_LOGW(TAG, "[%s] tracker did not promote the connection request within %u ms, connecting directly", this->get_name().c_str(), (unsigned)PROMOTION_FALLBACK_MS);
+              ESP_LOGW(TAG, "[%s] tracker did not promote the connection request within %u ms, connecting directly", this->entity_name(), (unsigned)PROMOTION_FALLBACK_MS);
               this->connect_requested_ms_ = now;
               this->parent()->connect();
             }
@@ -524,12 +524,12 @@ namespace esphome
     {
       if (this->xxtea->status() == XXTEA_STATUS_SUCCESS)
       {
-        ESP_LOGD(TAG, "[%s] poll: requesting device state", this->get_name().c_str());
+        ESP_LOGD(TAG, "[%s] poll: requesting device state", this->entity_name());
         this->pending_read_ = true;
       }
       else
       {
-        ESP_LOGI(TAG, "[%s] poll: secret key unknown, will try to read it", this->get_name().c_str());
+        ESP_LOGI(TAG, "[%s] poll: secret key unknown, will try to read it", this->entity_name());
         this->pending_secret_key_ = true;
       }
       this->request_work_(false);
@@ -539,7 +539,7 @@ namespace esphome
     {
       if (this->xxtea->status() != XXTEA_STATUS_SUCCESS)
       {
-        ESP_LOGE(TAG, "[%s] secret key unknown - cannot control the device", this->get_name().c_str());
+        ESP_LOGE(TAG, "[%s] secret key unknown - cannot control the device", this->entity_name());
         return;
       }
       const bool had_writes = this->has_writes_();
@@ -558,11 +558,11 @@ namespace esphome
         float new_temp = roundf(*call.get_target_temperature() * 2.0f) / 2.0f;
         if (std::isnan(new_temp) || new_temp < 5.0f || new_temp > 30.0f)
         {
-          ESP_LOGE(TAG, "[%s] rejecting out-of-range target temperature: %.1f C (allowed 5.0-30.0)", this->get_name().c_str(), *call.get_target_temperature());
+          ESP_LOGE(TAG, "[%s] rejecting out-of-range target temperature: %.1f C (allowed 5.0-30.0)", this->entity_name(), *call.get_target_temperature());
         }
         else if (s != nullptr && (new_temp < s->temperature_min || new_temp > s->temperature_max))
         {
-          ESP_LOGE(TAG, "[%s] rejecting target temperature %.1f C outside the device range %.1f-%.1f C", this->get_name().c_str(), new_temp, s->temperature_min, s->temperature_max);
+          ESP_LOGE(TAG, "[%s] rejecting target temperature %.1f C outside the device range %.1f-%.1f C", this->entity_name(), new_temp, s->temperature_min, s->temperature_max);
         }
         else
         {
@@ -572,13 +572,13 @@ namespace esphome
           const float current = this->pending_write_temperature_ ? this->requested_target_temperature_ : ((t != nullptr && fresh && !paused) ? t->target_temperature : NAN);
           if (!std::isnan(current) && std::fabs(current - new_temp) < 0.05f)
           {
-            ESP_LOGD(TAG, "[%s] target temperature unchanged (%.1f C), skipping write", this->get_name().c_str(), new_temp);
+            ESP_LOGD(TAG, "[%s] target temperature unchanged (%.1f C), skipping write", this->entity_name(), new_temp);
             if (this->pending_write_temperature_)
               this->temperature_requested_ms_ = now; // re-requested: still wanted (TTL)
           }
           else
           {
-            ESP_LOGD(TAG, "[%s] target temperature change: %.1f -> %.1f C", this->get_name().c_str(), !std::isnan(current) ? current : (t != nullptr ? t->target_temperature : NAN), new_temp);
+            ESP_LOGD(TAG, "[%s] target temperature change: %.1f -> %.1f C", this->entity_name(), !std::isnan(current) ? current : (t != nullptr ? t->target_temperature : NAN), new_temp);
             if (!this->pending_write_temperature_)
               this->target_before_request_ = this->target_temperature;
             this->temperature_requested_ms_ = now;
@@ -599,7 +599,7 @@ namespace esphome
         const ClimateMode new_mode = *call.get_mode();
         if (new_mode != ClimateMode::CLIMATE_MODE_HEAT && new_mode != ClimateMode::CLIMATE_MODE_AUTO && new_mode != ClimateMode::CLIMATE_MODE_OFF)
         {
-          ESP_LOGE(TAG, "[%s] unsupported mode %d", this->get_name().c_str(), (int)new_mode);
+          ESP_LOGE(TAG, "[%s] unsupported mode %d", this->entity_name(), (int)new_mode);
         }
         else
         {
@@ -607,13 +607,13 @@ namespace esphome
           const ClimateMode current = this->pending_write_settings_ ? this->requested_mode_ : (s != nullptr ? s->device_mode : new_mode);
           if (known && current == new_mode)
           {
-            ESP_LOGD(TAG, "[%s] mode unchanged (%d), skipping write", this->get_name().c_str(), (int)new_mode);
+            ESP_LOGD(TAG, "[%s] mode unchanged (%d), skipping write", this->entity_name(), (int)new_mode);
             if (this->pending_write_settings_)
               this->settings_requested_ms_ = now; // re-requested: still wanted (TTL)
           }
           else
           {
-            ESP_LOGD(TAG, "[%s] mode change: %d -> %d", this->get_name().c_str(), (int)current, (int)new_mode);
+            ESP_LOGD(TAG, "[%s] mode change: %d -> %d", this->entity_name(), (int)current, (int)new_mode);
             if (!this->pending_write_settings_)
               this->mode_before_request_ = this->mode;
             this->settings_requested_ms_ = now;
@@ -683,7 +683,7 @@ namespace esphome
       else if (user_command && this->slow_phase_ && (now - this->last_fast_rearm_ms_) >= FAST_REARM_MIN_MS)
       {
         // A new request for an eTRV that has been unreachable for a while: try promptly again.
-        ESP_LOGI(TAG, "[%s] new request - re-entering the fast retry phase", this->get_name().c_str());
+        ESP_LOGI(TAG, "[%s] new request - re-entering the fast retry phase", this->entity_name());
         this->txn_started_ms_ = now;
         this->slow_phase_ = false;
         this->retry_count_ = 0;
@@ -700,7 +700,7 @@ namespace esphome
     {
       if (this->parent()->state() != ClientState::IDLE)
       {
-        ESP_LOGV(TAG, "[%s] connection request deferred (parent=%s)", this->get_name().c_str(), client_state_str(this->parent()->state()));
+        ESP_LOGV(TAG, "[%s] connection request deferred (parent=%s)", this->entity_name(), client_state_str(this->parent()->state()));
         return; // loop() retries once the client is IDLE
       }
       if (this->parent()->get_gattc_if() == ESP_GATT_IF_NONE)
@@ -711,7 +711,7 @@ namespace esphome
       }
 
       if (this->xxtea->status() == XXTEA_STATUS_NOT_INITIALIZED)
-        ESP_LOGI(TAG, "[%s] Short press Danfoss Eco hardware button NOW in order to allow reading the secret key", this->get_name().c_str());
+        ESP_LOGI(TAG, "[%s] Short press Danfoss Eco hardware button NOW in order to allow reading the secret key", this->entity_name());
 
       // Service discovery costs 7-11 s of link time at the eTRV's slow connection interval. Discover
       // once (first link after boot, or after anything looked wrong at the remembered handles);
@@ -729,7 +729,7 @@ namespace esphome
 #endif
       if (discover && (this->gatt_cache_clean_pending_ || this->xxtea->status() != XXTEA_STATUS_SUCCESS))
       {
-        ESP_LOGD(TAG, "[%s] clearing the stack's cached service table before discovery", this->get_name().c_str());
+        ESP_LOGD(TAG, "[%s] clearing the stack's cached service table before discovery", this->entity_name());
         esp_ble_gattc_cache_clean(this->parent()->get_remote_bda());
         this->gatt_cache_clean_pending_ = false;
         from_device = true;
@@ -747,7 +747,7 @@ namespace esphome
       if (!this->parent()->enabled)
         this->parent()->set_enabled(true);
 
-      ESP_LOGD(TAG, "[%s] requesting BLE link (attempt %u, %s)", this->get_name().c_str(), (unsigned)this->connect_attempts_, discover ? "with service discovery" : "known handles, no discovery");
+      ESP_LOGD(TAG, "[%s] requesting BLE link (attempt %u, %s)", this->entity_name(), (unsigned)this->connect_attempts_, discover ? "with service discovery" : "known handles, no discovery");
       // Hand the request to the tracker's promote loop (same mechanism bluetooth_proxy uses): it
       // stops the scan, raises the coexistence preference to Bluetooth and calls connect().
       this->parent()->set_state(ClientState::DISCOVERED);
@@ -787,14 +787,14 @@ namespace esphome
         }
         else
         {
-          ESP_LOGW(TAG, "[%s] secret key characteristic not available (hardware button not pressed)", this->get_name().c_str());
+          ESP_LOGW(TAG, "[%s] secret key characteristic not available (hardware button not pressed)", this->entity_name());
         }
         this->pending_secret_key_ = false;
       }
 
       if (this->xxtea->status() != XXTEA_STATUS_SUCCESS)
       {
-        ESP_LOGW(TAG, "[%s] secret key unknown - cannot read or write the device", this->get_name().c_str());
+        ESP_LOGW(TAG, "[%s] secret key unknown - cannot read or write the device", this->entity_name());
         this->pending_read_ = this->pending_time_sync_ = this->pending_e10_ack_ = false;
         if (this->has_writes_())
           this->drop_writes_("secret key unknown");
@@ -832,7 +832,7 @@ namespace esphome
         const uint8_t new_raw = s->raw_mode_for(this->requested_mode_);
         if (new_raw == s->raw_mode)
         {
-          ESP_LOGD(TAG, "[%s] device already in the requested mode (%s)", this->get_name().c_str(), SettingsData::mode_str(s->raw_mode));
+          ESP_LOGD(TAG, "[%s] device already in the requested mode (%s)", this->entity_name(), SettingsData::mode_str(s->raw_mode));
           this->pending_write_settings_ = false;
           this->save_pending_();
           this->publish_climate_state();
@@ -848,7 +848,7 @@ namespace esphome
           this->batch_ = BATCH_WRITE_SETTINGS;
           this->wrote_settings_this_link_ = true;
           this->settings_sent_seq_ = this->settings_seq_;
-          ESP_LOGI(TAG, "[%s] writing mode %s -> %s", this->get_name().c_str(), SettingsData::mode_str(s->raw_mode), SettingsData::mode_str(new_raw));
+          ESP_LOGI(TAG, "[%s] writing mode %s -> %s", this->entity_name(), SettingsData::mode_str(s->raw_mode), SettingsData::mode_str(new_raw));
           if (this->send_write_(this->p_settings.get(), buff, sizeof(buff)))
             return;
           this->link_failed_("settings write could not be sent");
@@ -869,7 +869,7 @@ namespace esphome
         if (range != nullptr && range->is_paused())
         {
           // The Danfoss app never writes a set point while the eTRV is paused (OFF); neither do we.
-          ESP_LOGW(TAG, "[%s] the eTRV is paused (OFF) - not writing the set point %.1f C (switch to HEAT first)", this->get_name().c_str(), this->requested_target_temperature_);
+          ESP_LOGW(TAG, "[%s] the eTRV is paused (OFF) - not writing the set point %.1f C (switch to HEAT first)", this->entity_name(), this->requested_target_temperature_);
           this->pending_write_temperature_ = false;
           this->save_pending_();
           this->target_temperature = t->target_temperature;
@@ -877,7 +877,7 @@ namespace esphome
         }
         else if (range != nullptr && (this->requested_target_temperature_ < range->temperature_min || this->requested_target_temperature_ > range->temperature_max))
         {
-          ESP_LOGE(TAG, "[%s] requested set point %.1f C is outside the device range %.1f-%.1f C, not writing it", this->get_name().c_str(), this->requested_target_temperature_, range->temperature_min, range->temperature_max);
+          ESP_LOGE(TAG, "[%s] requested set point %.1f C is outside the device range %.1f-%.1f C, not writing it", this->entity_name(), this->requested_target_temperature_, range->temperature_min, range->temperature_max);
           this->pending_write_temperature_ = false;
           this->save_pending_();
           this->target_temperature = t->target_temperature;
@@ -885,7 +885,7 @@ namespace esphome
         }
         else if (std::fabs(t->target_temperature - this->requested_target_temperature_) < 0.05f)
         {
-          ESP_LOGD(TAG, "[%s] device already has the requested set point (%.1f C)", this->get_name().c_str(), t->target_temperature);
+          ESP_LOGD(TAG, "[%s] device already has the requested set point (%.1f C)", this->entity_name(), t->target_temperature);
           this->pending_write_temperature_ = false;
           this->save_pending_();
           this->publish_climate_state();
@@ -901,7 +901,7 @@ namespace esphome
           this->batch_ = BATCH_WRITE_TEMPERATURE;
           this->wrote_temperature_this_link_ = true;
           this->temperature_sent_seq_ = this->temperature_seq_;
-          ESP_LOGI(TAG, "[%s] writing set point %.1f -> %.1f C", this->get_name().c_str(), t->target_temperature, this->requested_target_temperature_);
+          ESP_LOGI(TAG, "[%s] writing set point %.1f -> %.1f C", this->entity_name(), t->target_temperature, this->requested_target_temperature_);
           if (this->send_write_(this->p_temperature.get(), buff, sizeof(buff)))
             return;
           this->link_failed_("temperature write could not be sent");
@@ -923,7 +923,7 @@ namespace esphome
         else if (!td->pack(buff, epoch, offset))
         {
           this->pending_time_sync_ = false;
-          ESP_LOGE(TAG, "[%s] could not encrypt the time", this->get_name().c_str());
+          ESP_LOGE(TAG, "[%s] could not encrypt the time", this->entity_name());
         }
         else
         {
@@ -932,7 +932,7 @@ namespace esphome
           this->time_sync_attempted_ = true;
           this->last_time_sync_ms_ = millis();
           this->pending_time_sync_ = false;
-          ESP_LOGI(TAG, "[%s] setting the eTRV clock (device utc=%d offset=%d s -> utc=%d offset=%d s)", this->get_name().c_str(), (int)td->epoch, (int)td->utc_offset, (int)epoch, (int)offset);
+          ESP_LOGI(TAG, "[%s] setting the eTRV clock (device utc=%d offset=%d s -> utc=%d offset=%d s)", this->entity_name(), (int)td->epoch, (int)td->utc_offset, (int)epoch, (int)offset);
           if (this->send_write_(this->p_time.get(), buff, sizeof(buff)))
             return;
           this->link_failed_("time write could not be sent");
@@ -954,18 +954,18 @@ namespace esphome
           const uint16_t flags = e->flags & ~(uint16_t)(1u << ErrorsData::E10_INVALID_TIME_BIT);
           if (!e->tail_is_zero())
           {
-            ESP_LOGW(TAG, "[%s] unexpected error block layout (%s) - not acknowledging E10", this->get_name().c_str(), format_hex_pretty(e->raw_, e->length).c_str());
+            ESP_LOGW(TAG, "[%s] unexpected error block layout (%s) - not acknowledging E10", this->entity_name(), HexDump(e->raw_, e->length).c_str());
           }
           else if (!e->pack(buff, flags))
           {
-            ESP_LOGE(TAG, "[%s] could not encrypt the error flags", this->get_name().c_str());
+            ESP_LOGE(TAG, "[%s] could not encrypt the error flags", this->entity_name());
           }
           else
           {
             this->batch_ = BATCH_WRITE_ERRORS;
             this->e10_ack_attempted_ = true;
             this->last_e10_ack_ms_ = millis();
-            ESP_LOGI(TAG, "[%s] clock is set - acknowledging E10 (error flags %#06x -> %#06x)", this->get_name().c_str(), e->flags, flags);
+            ESP_LOGI(TAG, "[%s] clock is set - acknowledging E10 (error flags %#06x -> %#06x)", this->entity_name(), e->flags, flags);
             if (this->send_write_(this->p_errors.get(), buff, sizeof(buff)))
               return;
             this->link_failed_("error flags write could not be sent");
@@ -1005,7 +1005,7 @@ namespace esphome
 
     void Device::teardown_link_(const char *reason, bool keep_enabled)
     {
-      ESP_LOGD(TAG, "[%s] closing link (%s): age=%u ms inflight=%u keep_enabled=%d", this->get_name().c_str(), reason, (unsigned)this->link_age_ms_(), (unsigned)this->inflight_, (int)keep_enabled);
+      ESP_LOGD(TAG, "[%s] closing link (%s): age=%u ms inflight=%u keep_enabled=%d", this->entity_name(), reason, (unsigned)this->link_age_ms_(), (unsigned)this->inflight_, (int)keep_enabled);
       this->flush_climate_state_(); // whatever an interrupted read batch did get
       this->due_waiting_ = false;
       this->inflight_ = 0;
@@ -1045,7 +1045,7 @@ namespace esphome
     {
       if (this->consecutive_hard_errors_ < 255)
         this->consecutive_hard_errors_++;
-      ESP_LOGE(TAG, "[%s] %s (protocol error %u/%u)", this->get_name().c_str(), why, (unsigned)this->consecutive_hard_errors_, (unsigned)MAX_HARD_ERRORS);
+      ESP_LOGE(TAG, "[%s] %s (protocol error %u/%u)", this->entity_name(), why, (unsigned)this->consecutive_hard_errors_, (unsigned)MAX_HARD_ERRORS);
       if (this->consecutive_hard_errors_ >= MAX_HARD_ERRORS)
       {
         this->give_up_(why);
@@ -1080,7 +1080,7 @@ namespace esphome
         delay = (this->slow_phase_ && (now - this->failing_since_ms_) > SLOW_LONG_AFTER_MS) ? SLOW_RETRY_LONG_MS : SLOW_RETRY_MS;
       }
       this->next_connect_ms_ = now + delay;
-      ESP_LOGW(TAG, "[%s] %s - retry in %u s (%s phase, links=%u, failed opens=%u, requests=%u)", this->get_name().c_str(), why, (unsigned)(delay / 1000), this->slow_phase_ ? "slow" : "fast", (unsigned)this->links_this_txn_, (unsigned)this->open_failures_, (unsigned)this->connect_attempts_);
+      ESP_LOGW(TAG, "[%s] %s - retry in %u s (%s phase, links=%u, failed opens=%u, requests=%u)", this->entity_name(), why, (unsigned)(delay / 1000), this->slow_phase_ ? "slow" : "fast", (unsigned)this->links_this_txn_, (unsigned)this->open_failures_, (unsigned)this->connect_attempts_);
     }
 
     void Device::drop_writes_(const char *reason, bool temperature, bool settings)
@@ -1089,7 +1089,7 @@ namespace esphome
       settings = settings && this->pending_write_settings_;
       if (!temperature && !settings)
         return;
-      ESP_LOGE(TAG, "[%s] dropping the requested %s%s%s (%s)", this->get_name().c_str(), temperature ? "set point" : "", temperature && settings ? " and " : "", settings ? "mode" : "", reason);
+      ESP_LOGE(TAG, "[%s] dropping the requested %s%s%s (%s)", this->entity_name(), temperature ? "set point" : "", temperature && settings ? " and " : "", settings ? "mode" : "", reason);
       // Show what the device really has again (or what was shown before the request, if the device
       // has not been read yet).
       auto *t = this->p_temperature->get();
@@ -1152,12 +1152,12 @@ namespace esphome
       }
       this->pending_saved_ = true;
       if (this->has_writes_())
-        ESP_LOGI(TAG, "[%s] resuming requests from before the restart: set point=%s mode=%s", this->get_name().c_str(), this->pending_write_temperature_ ? "yes" : "no", this->pending_write_settings_ ? "yes" : "no");
+        ESP_LOGI(TAG, "[%s] resuming requests from before the restart: set point=%s mode=%s", this->entity_name(), this->pending_write_temperature_ ? "yes" : "no", this->pending_write_settings_ ? "yes" : "no");
     }
 
     void Device::give_up_(const char *reason)
     {
-      ESP_LOGE(TAG, "[%s] giving up (%s): dropping pending read=%d set point=%d mode=%d key=%d time=%d - next attempt on the next poll or command", this->get_name().c_str(), reason, (int)this->pending_read_, (int)this->pending_write_temperature_, (int)this->pending_write_settings_, (int)this->pending_secret_key_, (int)this->pending_time_sync_);
+      ESP_LOGE(TAG, "[%s] giving up (%s): dropping pending read=%d set point=%d mode=%d key=%d time=%d - next attempt on the next poll or command", this->entity_name(), reason, (int)this->pending_read_, (int)this->pending_write_temperature_, (int)this->pending_write_settings_, (int)this->pending_secret_key_, (int)this->pending_time_sync_);
       this->drop_writes_(reason);
       this->pending_read_ = false;
       this->pending_secret_key_ = false;
@@ -1192,7 +1192,7 @@ namespace esphome
         this->opens_failed_in_row_ = 0; // the eTRV heard us
         if (this->want_link_ && this->links_this_txn_ < 255)
           this->links_this_txn_++;
-        ESP_LOGD(TAG, "[%s] connect, conn_id=%d", this->get_name().c_str(), param->connect.conn_id);
+        ESP_LOGD(TAG, "[%s] connect, conn_id=%d", this->entity_name(), param->connect.conn_id);
         break;
 
       case ESP_GATTC_OPEN_EVT:
@@ -1200,7 +1200,7 @@ namespace esphome
         this->last_open_conn_id_ = param->open.conn_id;
         if (param->open.status == ESP_GATT_OK)
         {
-          ESP_LOGD(TAG, "[%s] open OK, conn_id=%d, mtu=%d (%u ms after connect)", this->get_name().c_str(), param->open.conn_id, param->open.mtu, (unsigned)this->link_age_ms_());
+          ESP_LOGD(TAG, "[%s] open OK, conn_id=%d, mtu=%d (%u ms after connect)", this->entity_name(), param->open.conn_id, param->open.mtu, (unsigned)this->link_age_ms_());
           // V3_WITH_CACHE: BLEClientBase has just set itself ESTABLISHED and will not discover
           // services, so the link is ready for us right now.
           if (this->parent()->state() == ClientState::ESTABLISHED)
@@ -1210,7 +1210,7 @@ namespace esphome
         {
           // Bluedroid still holds a link to the eTRV (a close that never completed). ESPHome treats
           // this as an open without CONNECT_EVT and has no conn_id to close it: close it right away.
-          ESP_LOGW(TAG, "[%s] open returned ALREADY_OPEN (conn_id=%d) - closing the stale link", this->get_name().c_str(), param->open.conn_id);
+          ESP_LOGW(TAG, "[%s] open returned ALREADY_OPEN (conn_id=%d) - closing the stale link", this->entity_name(), param->open.conn_id);
           this->link_up_ = false;
           this->inflight_ = 0;
           if (this->parent()->get_conn_id() != NO_CONN_ID)
@@ -1231,7 +1231,7 @@ namespace esphome
         {
           // A late open result for a client that had no attempt of ours outstanding (e.g. after a
           // client-watchdog reset): not a failed attempt - it must not cut a longer back-off short.
-          ESP_LOGD(TAG, "[%s] late open result (status=%#04x) while the client was %s - ignored", this->get_name().c_str(), param->open.status, client_state_str(this->last_parent_state_));
+          ESP_LOGD(TAG, "[%s] late open result (status=%#04x) while the client was %s - ignored", this->entity_name(), param->open.status, client_state_str(this->last_parent_state_));
         }
         else
         {
@@ -1247,7 +1247,7 @@ namespace esphome
             this->open_failures_++;
           if (this->opens_failed_in_row_ < 255)
             this->opens_failed_in_row_++;
-          ESP_LOGW(TAG, "[%s] failed to open, status=%#04x (failed opens %u, %u in a row)", this->get_name().c_str(), param->open.status, (unsigned)this->open_failures_, (unsigned)this->opens_failed_in_row_);
+          ESP_LOGW(TAG, "[%s] failed to open, status=%#04x (failed opens %u, %u in a row)", this->entity_name(), param->open.status, (unsigned)this->open_failures_, (unsigned)this->opens_failed_in_row_);
           if (!this->want_link_)
           {
             this->parent()->set_enabled(false); // unsolicited auto_connect attempt, nothing to do
@@ -1278,7 +1278,7 @@ namespace esphome
         // A link lost while only optional work (clock, E10, informational reads) was in flight has
         // done all its real work: nothing to retry.
         const bool info_only = !this->has_pending_();
-        ESP_LOGD(TAG, "[%s] %s, conn_id=%d, reason=%#04x, link_age=%u ms", this->get_name().c_str(), event == ESP_GATTC_CLOSE_EVT ? "close" : "disconnect", event == ESP_GATTC_CLOSE_EVT ? param->close.conn_id : param->disconnect.conn_id, reason, (unsigned)this->link_age_ms_());
+        ESP_LOGD(TAG, "[%s] %s, conn_id=%d, reason=%#04x, link_age=%u ms", this->entity_name(), event == ESP_GATTC_CLOSE_EVT ? "close" : "disconnect", event == ESP_GATTC_CLOSE_EVT ? param->close.conn_id : param->disconnect.conn_id, reason, (unsigned)this->link_age_ms_());
         this->link_up_ = false;
         this->inflight_ = 0;
         this->pin_inflight_ = false;
@@ -1290,9 +1290,9 @@ namespace esphome
         this->node_state = ClientState::IDLE;
         this->flush_climate_state_();
         if (lost > 0 && info_only)
-          ESP_LOGD(TAG, "[%s] link lost during optional work (reason=%#04x) - done again on a later link", this->get_name().c_str(), reason);
+          ESP_LOGD(TAG, "[%s] link lost during optional work (reason=%#04x) - done again on a later link", this->entity_name(), reason);
         else if (lost > 0)
-          ESP_LOGW(TAG, "[%s] link lost with %u unanswered request(s) (reason=%#04x)%s", this->get_name().c_str(), (unsigned)lost, reason, this->want_link_ ? " - pending work will be retried" : "");
+          ESP_LOGW(TAG, "[%s] link lost with %u unanswered request(s) (reason=%#04x)%s", this->entity_name(), (unsigned)lost, reason, this->want_link_ ? " - pending work will be retried" : "");
         if (info_only && this->want_link_)
         {
           // the transaction is complete: nothing to retry
@@ -1325,11 +1325,11 @@ namespace esphome
       case ESP_GATTC_SEARCH_CMPL_EVT:
         if (param->search_cmpl.status != ESP_GATT_OK)
         {
-          ESP_LOGW(TAG, "[%s] service discovery failed, status=%#04x", this->get_name().c_str(), param->search_cmpl.status);
+          ESP_LOGW(TAG, "[%s] service discovery failed, status=%#04x", this->entity_name(), param->search_cmpl.status);
           this->link_failed_("service discovery failed");
           break;
         }
-        ESP_LOGD(TAG, "[%s] service discovery complete (%u ms after connect)", this->get_name().c_str(), (unsigned)this->link_age_ms_());
+        ESP_LOGD(TAG, "[%s] service discovery complete (%u ms after connect)", this->entity_name(), (unsigned)this->link_age_ms_());
         for (auto p : this->properties)
           p->init_handle(this->parent());
 
@@ -1342,11 +1342,11 @@ namespace esphome
           this->parent()->set_connection_type(ConnectionType::V3_WITH_CACHE);
         if (!this->handles_verified_)
         {
-          ESP_LOGE(TAG, "[%s] required characteristics not found (pin=%#04x battery=%#04x temperature=%#04x settings=%#04x errors=%#04x) - is this a Danfoss Eco?", this->get_name().c_str(), this->p_pin->handle, this->p_battery->handle, this->p_temperature->handle, this->p_settings->handle, this->p_errors->handle);
+          ESP_LOGE(TAG, "[%s] required characteristics not found (pin=%#04x battery=%#04x temperature=%#04x settings=%#04x errors=%#04x) - is this a Danfoss Eco?", this->entity_name(), this->p_pin->handle, this->p_battery->handle, this->p_temperature->handle, this->p_settings->handle, this->p_errors->handle);
           this->hard_error_("required characteristics not found");
           break;
         }
-        ESP_LOGD(TAG, "[%s] handles: pin=%#04x battery=%#04x temperature=%#04x settings=%#04x errors=%#04x time=%#04x key=%#04x", this->get_name().c_str(), this->p_pin->handle, this->p_battery->handle, this->p_temperature->handle, this->p_settings->handle, this->p_errors->handle, this->p_time->handle, this->p_secret_key->handle);
+        ESP_LOGD(TAG, "[%s] handles: pin=%#04x battery=%#04x temperature=%#04x settings=%#04x errors=%#04x time=%#04x key=%#04x", this->entity_name(), this->p_pin->handle, this->p_battery->handle, this->p_temperature->handle, this->p_settings->handle, this->p_errors->handle, this->p_time->handle, this->p_secret_key->handle);
         this->on_link_ready_();
         break;
 
@@ -1362,7 +1362,7 @@ namespace esphome
         break;
 
       default:
-        ESP_LOGV(TAG, "[%s] unhandled event: event=%d, gattc_if=%d", this->get_name().c_str(), (int)event, gattc_if);
+        ESP_LOGV(TAG, "[%s] unhandled event: event=%d, gattc_if=%d", this->entity_name(), (int)event, gattc_if);
         break;
       }
     }
@@ -1379,7 +1379,7 @@ namespace esphome
       if (!this->handles_verified_)
       {
         // Cannot happen unless ESPHome changed the V3_WITH_CACHE semantics; never write to guessed handles.
-        ESP_LOGE(TAG, "[%s] link ready without verified handles - discovering on the next link", this->get_name().c_str());
+        ESP_LOGE(TAG, "[%s] link ready without verified handles - discovering on the next link", this->entity_name());
         this->link_failed_("handles unknown");
         return false;
       }
@@ -1392,7 +1392,7 @@ namespace esphome
     void Device::invalidate_handles_(const char *why)
     {
       if (this->handles_verified_)
-        ESP_LOGW(TAG, "[%s] %s - forgetting GATT handles, next link will rediscover services", this->get_name().c_str(), why);
+        ESP_LOGW(TAG, "[%s] %s - forgetting GATT handles, next link will rediscover services", this->entity_name(), why);
       this->handles_verified_ = false;
       this->handles_from_device_ = false;
       // ... from the eTRV itself, not from the stack's cached service table
@@ -1402,7 +1402,7 @@ namespace esphome
 
     void Device::write_pin()
     {
-      ESP_LOGV(TAG, "[%s] writing pin (handle=%#04x)", this->get_name().c_str(), this->p_pin->handle);
+      ESP_LOGV(TAG, "[%s] writing pin (handle=%#04x)", this->entity_name(), this->p_pin->handle);
 
       uint8_t pin_bytes[sizeof(uint32_t)];
       write_int(pin_bytes, 0, this->pin_code_);
@@ -1426,7 +1426,7 @@ namespace esphome
 
       if (param.status != ESP_GATT_OK)
       {
-        ESP_LOGE(TAG, "[%s] pin FAILED, status=%#04x (link_age=%u ms)", this->get_name().c_str(), param.status, (unsigned)this->link_age_ms_());
+        ESP_LOGE(TAG, "[%s] pin FAILED, status=%#04x (link_age=%u ms)", this->entity_name(), param.status, (unsigned)this->link_age_ms_());
         if (is_transient_status(param.status))
         {
           // the link died underneath the request: a radio problem, retried like any link loss
@@ -1443,7 +1443,7 @@ namespace esphome
         return;
       }
 
-      ESP_LOGV(TAG, "[%s] pin OK (%u ms after connect)", this->get_name().c_str(), (unsigned)this->link_age_ms_());
+      ESP_LOGV(TAG, "[%s] pin OK (%u ms after connect)", this->entity_name(), (unsigned)this->link_age_ms_());
       this->node_state = ClientState::ESTABLISHED; // loop() issues the pending operations
     }
 
@@ -1452,9 +1452,9 @@ namespace esphome
       if (this->inflight_ > 0)
         this->inflight_--;
       else
-        ESP_LOGW(TAG, "[%s] unexpected read response (handle=%#04x)", this->get_name().c_str(), param.handle);
+        ESP_LOGW(TAG, "[%s] unexpected read response (handle=%#04x)", this->entity_name(), param.handle);
       this->last_activity_ms_ = millis();
-      ESP_LOGV(TAG, "[%s] read rsp: handle=%#04x status=%#04x len=%u inflight=%u link_age=%u ms", this->get_name().c_str(), param.handle, param.status, (unsigned)param.value_len, (unsigned)this->inflight_, (unsigned)this->link_age_ms_());
+      ESP_LOGV(TAG, "[%s] read rsp: handle=%#04x status=%#04x len=%u inflight=%u link_age=%u ms", this->entity_name(), param.handle, param.status, (unsigned)param.value_len, (unsigned)this->inflight_, (unsigned)this->link_age_ms_());
 
       auto found = find_if(properties.begin(), properties.end(),
                            [&param](const shared_ptr<DeviceProperty> &p)
@@ -1467,7 +1467,7 @@ namespace esphome
 
       if (param.status != ESP_GATT_OK)
       {
-        ESP_LOGW(TAG, "[%s] failed to read characteristic: handle=%#04x, status=%#04x", this->get_name().c_str(), param.handle, param.status);
+        ESP_LOGW(TAG, "[%s] failed to read characteristic: handle=%#04x, status=%#04x", this->entity_name(), param.handle, param.status);
         if (is_transient_status(param.status))
         {
           this->batch_link_errors_++;
@@ -1486,7 +1486,7 @@ namespace esphome
       }
       else if (prop == nullptr)
       {
-        ESP_LOGW(TAG, "[%s] unknown property with handle=%#04x", this->get_name().c_str(), param.handle);
+        ESP_LOGW(TAG, "[%s] unknown property with handle=%#04x", this->entity_name(), param.handle);
       }
       else if (!prop->accepts_length(param.value_len))
       {
@@ -1494,9 +1494,9 @@ namespace esphome
         // does not carry what we think it does. A 1-byte payload on an encrypted characteristic is
         // the eTRV's error code (wrong PIN / not paired).
         if (param.value_len == 1 && prop->expected_length() > 1)
-          ESP_LOGE(TAG, "[%s] characteristic handle=%#04x returned the 1-byte error code %#04x - wrong pin_code or device not paired?", this->get_name().c_str(), param.handle, param.value[0]);
+          ESP_LOGE(TAG, "[%s] characteristic handle=%#04x returned the 1-byte error code %#04x - wrong pin_code or device not paired?", this->entity_name(), param.handle, param.value[0]);
         else
-          ESP_LOGW(TAG, "[%s] characteristic handle=%#04x returned %u bytes, expected %u - ignoring", this->get_name().c_str(), param.handle, (unsigned)param.value_len, (unsigned)prop->expected_length());
+          ESP_LOGW(TAG, "[%s] characteristic handle=%#04x returned %u bytes, expected %u - ignoring", this->entity_name(), param.handle, (unsigned)param.value_len, (unsigned)prop->expected_length());
         if (informational)
         {
           if (info_idx >= 0)
@@ -1588,7 +1588,7 @@ namespace esphome
         if (!this->has_writes_() && !this->pending_time_sync_)
         {
           if (this->slow_phase_)
-            ESP_LOGI(TAG, "[%s] reachable again", this->get_name().c_str());
+            ESP_LOGI(TAG, "[%s] reachable again", this->entity_name());
           this->slow_phase_ = false;
           this->retry_count_ = 0;
           this->open_failures_ = 0;
@@ -1630,9 +1630,9 @@ namespace esphome
       {
         this->dst_warning_logged_ = true;
         if (tz.has_dst())
-          ESP_LOGI(TAG, "[%s] automatic summer time is off in this eTRV: it runs on standard time (1 h behind in summer) - it can be switched on in the Danfoss app", this->get_name().c_str());
+          ESP_LOGI(TAG, "[%s] automatic summer time is off in this eTRV: it runs on standard time (1 h behind in summer) - it can be switched on in the Danfoss app", this->entity_name());
         else
-          ESP_LOGW(TAG, "[%s] the eTRV applies summer time itself, but the configured timezone has none - its clock will be 1 h off in summer (switch it off in the Danfoss app)", this->get_name().c_str());
+          ESP_LOGW(TAG, "[%s] the eTRV applies summer time itself, but the configured timezone has none - its clock will be 1 h off in summer (switch it off in the Danfoss app)", this->entity_name());
       }
 #endif
       return true;
@@ -1667,12 +1667,12 @@ namespace esphome
           // Set successfully earlier, now far off again: the eTRV does not keep its clock (it raises
           // no E10 for this). Reported through clock_error / problems until the clock holds.
           if (!this->clock_lost_)
-            ESP_LOGW(TAG, "[%s] the eTRV lost its clock again (utc=%d) - its schedule and vacations cannot work", this->get_name().c_str(), (int)td->epoch);
+            ESP_LOGW(TAG, "[%s] the eTRV lost its clock again (utc=%d) - its schedule and vacations cannot work", this->entity_name(), (int)td->epoch);
           this->clock_lost_ = true;
         }
         if (!this->pending_time_sync_ && (!this->time_sync_attempted_ || (now - this->last_time_sync_ms_) >= TIME_SYNC_MIN_INTERVAL_MS))
         {
-          ESP_LOGD(TAG, "[%s] eTRV clock off by %d s (offset %d, expected %d) - will set it", this->get_name().c_str(), (int)drift, (int)td->utc_offset, (int)offset);
+          ESP_LOGD(TAG, "[%s] eTRV clock off by %d s (offset %d, expected %d) - will set it", this->entity_name(), (int)drift, (int)td->utc_offset, (int)offset);
           this->pending_time_sync_ = true;
         }
       }
@@ -1722,9 +1722,9 @@ namespace esphome
       if (!this->errors_reported_ || e->flags != this->reported_error_flags_ || lost != this->reported_clock_lost_)
       {
         if (!problems.empty())
-          ESP_LOGW(TAG, "[%s] eTRV reports: %s", this->get_name().c_str(), problems.c_str());
+          ESP_LOGW(TAG, "[%s] eTRV reports: %s", this->entity_name(), problems.c_str());
         else if (this->errors_reported_)
-          ESP_LOGI(TAG, "[%s] eTRV reports no errors", this->get_name().c_str());
+          ESP_LOGI(TAG, "[%s] eTRV reports no errors", this->entity_name());
         this->errors_reported_ = true;
         this->reported_error_flags_ = e->flags;
         this->reported_clock_lost_ = lost;
@@ -1804,7 +1804,7 @@ namespace esphome
       }
       if (this->inflight_ > 0)
       {
-        ESP_LOGD(TAG, "[%s] reading informational values (%#05x)", this->get_name().c_str(), (unsigned)this->info_batch_mask_);
+        ESP_LOGD(TAG, "[%s] reading informational values (%#05x)", this->entity_name(), (unsigned)this->info_batch_mask_);
         return true;
       }
       this->batch_ = BATCH_NONE;
@@ -1857,7 +1857,7 @@ namespace esphome
         day = last + 1;
       }
       auto *first = this->p_schedule[0]->get();
-      ESP_LOGD(TAG, "[%s] schedule: home %.1f C, away %.1f C, %s", this->get_name().c_str(), first->home_temperature(), first->away_temperature(), out.c_str());
+      ESP_LOGD(TAG, "[%s] schedule: home %.1f C, away %.1f C, %s", this->entity_name(), first->home_temperature(), first->away_temperature(), out.c_str());
       if (out.size() > 255)
         out = out.substr(0, 252) + "..."; // Home Assistant state limit
       if (this->schedule_ != nullptr)
@@ -1875,9 +1875,9 @@ namespace esphome
       if (this->inflight_ > 0)
         this->inflight_--;
       else
-        ESP_LOGW(TAG, "[%s] unexpected write response (handle=%#04x)", this->get_name().c_str(), param.handle);
+        ESP_LOGW(TAG, "[%s] unexpected write response (handle=%#04x)", this->entity_name(), param.handle);
       this->last_activity_ms_ = millis();
-      ESP_LOGD(TAG, "[%s] write rsp: handle=%#04x status=%#04x link_age=%u ms", this->get_name().c_str(), param.handle, param.status, (unsigned)this->link_age_ms_());
+      ESP_LOGD(TAG, "[%s] write rsp: handle=%#04x status=%#04x link_age=%u ms", this->entity_name(), param.handle, param.status, (unsigned)this->link_age_ms_());
 
       const bool is_temperature = param.handle == this->p_temperature->handle;
       const bool is_settings = param.handle == this->p_settings->handle;
@@ -1919,13 +1919,13 @@ namespace esphome
       {
         // The clock is optional: a failed or rejected clock write is never a reason to fail the
         // link or to retry (rate-limited by TIME_SYNC_MIN_INTERVAL_MS).
-        ESP_LOGW(TAG, "[%s] clock write failed, status=%#04x", this->get_name().c_str(), param.status);
+        ESP_LOGW(TAG, "[%s] clock write failed, status=%#04x", this->entity_name(), param.status);
         this->pending_time_sync_ = false;
       }
       else if (is_errors)
       {
         // Optional as well (rate-limited by E10_ACK_MIN_INTERVAL_MS).
-        ESP_LOGW(TAG, "[%s] error flags write failed, status=%#04x", this->get_name().c_str(), param.status);
+        ESP_LOGW(TAG, "[%s] error flags write failed, status=%#04x", this->entity_name(), param.status);
         this->pending_e10_ack_ = false;
       }
       else if (is_transient_status(param.status))
@@ -1935,7 +1935,7 @@ namespace esphome
       }
       else
       {
-        ESP_LOGE(TAG, "[%s] write rejected by the device: handle=%#04x, status=%#04x", this->get_name().c_str(), param.handle, param.status);
+        ESP_LOGE(TAG, "[%s] write rejected by the device: handle=%#04x, status=%#04x", this->entity_name(), param.handle, param.status);
         auto *t = this->p_temperature->get();
         auto *s = this->p_settings->get();
         // Only drop the request if the rejected write carried the latest value.
@@ -1972,16 +1972,17 @@ namespace esphome
     void Device::set_secret_key(const string &str)
     {
       // initialize the preference object
-      uint32_t hash = fnv1_hash("danfoss_eco_secret__" + this->get_name());
+      // the hash is the flash key of the stored secret key: it must not change between versions
+      uint32_t hash = fnv1_hash(string("danfoss_eco_secret__") + this->entity_name());
       this->secret_pref_ = global_preferences->make_preference<SecretKeyValue>(hash, true);
 
       if (str.length() > 0)
       {
         uint8_t buff[SECRET_KEY_LENGTH];
-        ESP_LOGD(TAG, "[%s] secret_key was passed via config", this->get_name().c_str());
+        ESP_LOGD(TAG, "[%s] secret_key was passed via config", this->entity_name());
         if (str.length() != SECRET_KEY_LENGTH * 2 || !parse_hex_str(str.c_str(), SECRET_KEY_LENGTH * 2, buff))
         {
-          ESP_LOGE(TAG, "[%s] secret_key must be 32 hex characters", this->get_name().c_str());
+          ESP_LOGE(TAG, "[%s] secret_key must be 32 hex characters", this->entity_name());
           this->mark_failed();
           return;
         }
@@ -1993,7 +1994,7 @@ namespace esphome
         if (this->secret_pref_.load(&key_buff))
         {
           // use persisted secret value
-          ESP_LOGD(TAG, "[%s] secret_key was loaded from flash", this->get_name().c_str());
+          ESP_LOGD(TAG, "[%s] secret_key was loaded from flash", this->entity_name());
           this->set_secret_key(key_buff.value, false);
         }
       }
@@ -2003,7 +2004,7 @@ namespace esphome
     {
       // never log the key itself (it is marked sensitive in the configuration); only during the
       // pairing window is it printed once, so that it can be put into the YAML
-      ESP_LOGV(TAG, "[%s] secret_key set (%u bytes)", this->get_name().c_str(), (unsigned)SECRET_KEY_LENGTH);
+      ESP_LOGV(TAG, "[%s] secret_key set (%u bytes)", this->entity_name(), (unsigned)SECRET_KEY_LENGTH);
 
       int status = this->xxtea->set_key(key, SECRET_KEY_LENGTH);
       if (status != XXTEA_STATUS_SUCCESS)
@@ -2018,7 +2019,7 @@ namespace esphome
         this->secret_pref_.save(&key_buff);
         global_preferences->sync();
 
-        ESP_LOGI(TAG, "[%s] secret_key was saved to flash", this->get_name().c_str());
+        ESP_LOGI(TAG, "[%s] secret_key was saved to flash", this->entity_name());
       }
     }
 

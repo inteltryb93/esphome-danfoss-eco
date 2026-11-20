@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "esphome/core/component.h"
+#include "esphome/core/log.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -36,6 +37,10 @@ namespace esphome
         {
         public:
             float get_setup_priority() const override { return setup_priority::DATA; }
+
+            // The entity name as a C string (log lines, the flash key of the stored secret key).
+            // Replaces EntityBase::get_name(), deprecated since ESPHome 2026.11.0 (removed in 2027.5.0).
+            const char *entity_name() const { return LOG_STR_ARG(this->get_log_name()); }
 
             ClimateTraits traits() override
             {

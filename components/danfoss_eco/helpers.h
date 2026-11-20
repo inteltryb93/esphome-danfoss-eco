@@ -1,5 +1,7 @@
 #pragma once
 
+#include "esphome/core/helpers.h"
+
 #include "xxtea.h"
 
 #include <esp_bt_defs.h>
@@ -13,6 +15,20 @@ namespace esphome
         using namespace std;
 
         const char *const TAG = "danfoss_eco";
+
+        // Hex dump of a short payload for a log line ("0A.1B.2C"), kept on the stack. Use it as a
+        // temporary: HexDump(data, len).c_str(). It replaces ESPHome's std::string
+        // format_hex_pretty(), which left esphome/core/helpers.h in ESPHome 2026.11.0. Payloads here
+        // are at most 20 bytes; anything longer than the buffer is cut, never overrun.
+        class HexDump
+        {
+        public:
+            HexDump(const uint8_t *data, size_t len) { format_hex_pretty_to(this->buf_, data, len, '.'); }
+            const char *c_str() const { return this->buf_; }
+
+        private:
+            char buf_[format_hex_pretty_size(32)];
+        };
 
         void encode_hex(const uint8_t *data, size_t len, char *buff);
         bool parse_hex_str(const char *data, size_t str_len, uint8_t *buff);
